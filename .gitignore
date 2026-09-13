@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+venv/
+.venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build-backend/
+dist-backend/
+server.spec
+
+# Build & Release Artifacts
+dist/
+build/
+release/
+frontend/dist/
+resources/ffmpeg/
+.vite/
+
+# Temporary, Logs & User Data
+temp/
+tmp/
+cache/
+logs/
+*.log
+outputs/
+user-data/
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+ehthumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

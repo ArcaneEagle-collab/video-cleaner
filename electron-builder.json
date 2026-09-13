@@ -1,0 +1,76 @@
+{
+  "appId": "com.amna.videocleaner",
+  "productName": "Video Cleaner",
+  "copyright": "Copyright © 2026 Amna",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "desktop/**/*",
+    "frontend/dist/**/*",
+    "video_cleaner.ico",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "dist-backend/server",
+      "to": "backend",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "resources/ffmpeg",
+      "to": "ffmpeg",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "video_cleaner.ico",
+    "fileAssociations": [
+      {
+        "ext": "mp4",
+        "name": "Video Cleaner Supported Video",
+        "description": "MP4 Video"
+      },
+      {
+        "ext": "mov",
+        "name": "Video Cleaner Supported Video",
+        "description": "QuickTime Video"
+      },
+      {
+        "ext": "mkv",
+        "name": "Video Cleaner Supported Video",
+        "description": "Matroska Video"
+      },
+      {
+        "ext": "webm",
+        "name": "Video Cleaner Supported Video",
+        "description": "WebM Video"
+      },
+      {
+        "ext": "avi",
+        "name": "Video Cleaner Supported Video",
+        "description": "AVI Video"
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": "always",
+    "createStartMenuShortcut": true,
+    "shortcutName": "Video Cleaner",
+    "installerIcon": "video_cleaner.ico",
+    "uninstallerIcon": "video_cleaner.ico",
+    "installerHeaderIcon": "video_cleaner.ico",
+    "uninstallDisplayName": "Video Cleaner",
+    "artifactName": "VideoCleaner-Setup.exe",
+    "deleteAppDataOnUninstall": false
+  }
+}

@@ -1,0 +1,45 @@
+# Changelog
+
+All notable changes to Video Cleaner are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [1.0.0] - 2026-09-13
+
+### Initial Public Desktop Production Release
+
+#### Desktop Shell & Packaging
+- **Standalone Windows Installer**: Packaged as `VideoCleaner-Setup.exe` targeting Windows 10 & 11 (64-bit).
+- **Portable Distribution**: Provided as `VideoCleaner-Portable.zip` for no-install portable execution.
+- **Zero Prerequisites**: Bundles complete Python runtime, OpenCV C++ libraries, NumPy, and full 64-bit FFmpeg/FFprobe distributions. Users do not need to install Python, Node.js, FFmpeg, or any development tools.
+- **Silent Background Process Management**: Local FastAPI backend and FFmpeg processes launch automatically with `CREATE_NO_WINDOW` flags (no command prompt or terminal windows).
+- **Single Instance Enforcement**: Automatically brings existing window to focus if launched a second time.
+- **Dynamic Port Allocation**: Automatically checks and allocates available local ports on `127.0.0.1`.
+- **Clean Windows Uninstaller**: Registered in Windows Settings &rarr; Apps and Control Panel; uninstalls cleanly without deleting user-created video exports.
+- **File Associations**: Registered support for `.mp4`, `.mov`, `.mkv`, `.webm`, and `.avi` files.
+- **Branding**: Official application icon (`video_cleaner.ico`) and subtle "Made by Amna" branding.
+
+#### Computer Vision & Detection Pipeline
+- **Multi-Detector Architecture**:
+  - `StaticImageDetector`: SSIM, perceptual dHash, HSV histogram analysis, and temporal sensor noise estimation.
+  - `ZoomPanDetector`: Farneback dense optical flow vector field decomposition, affine planar residual analysis, and radial angle uniformity to isolate Ken Burns animations.
+  - `SimpleBackgroundDetector`: Border perimeter uniformity and Laplacian edge analysis for graphic card cutouts.
+  - `TransitionDetector`: Luminance curve dip analysis (dips to black/white), monotonic crossfades, and dissolves.
+  - `MotionDetector`: Spatial grid decomposition separating local micro-motions from uniform global motion.
+  - `DuplicateDetector`: Cross-scene perceptual hash matching for repeated slides.
+- **False-Positive Protection**: Tuned thresholding and facial micro-motion preservation for talking heads, stationary camera recordings, and subtle physical movements.
+
+#### User Interface & Experience
+- **Interactive Scrubber Timeline**: Color-coded cuts (Green = Keep, Red = Remove, Yellow = Uncertain).
+- **Synchronized Video Player**: Frame-by-frame stepping (`-1` / `+1` frame), segment jumping, active classification badges, and manual Keep/Remove overrides.
+- **Editable Cuts Table**: Searchable, sortable segment table with split cut functionality and bulk actions.
+- **Export Control Center**: Customizable clip padding, quality selection (Original, High, Medium), codec options (H.264), and combined master video download.
+- **Batch Processing Queue**: Multi-video autonomous processing queue.
+- **Settings & Diagnostics Modal**:
+  - Storage & Outputs: Configurable destination directory and temporary file cache manager.
+  - Diagnostics: Engine health check, port status, bundled FFmpeg path inspector, and local sanitized log viewer.
+  - Privacy & Analytics: 100% local processing declaration and anonymous telemetry consent toggle.
+  - About: Version metadata and update checker.

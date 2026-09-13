@@ -1,0 +1,23 @@
+{
+  "name": "video-cleaner",
+  "productName": "Video Cleaner",
+  "version": "1.0.0",
+  "description": "Video Cleaner by Amna - Intelligent editorial image removal and usable footage extractor",
+  "main": "desktop/main.js",
+  "author": {
+    "name": "Amna"
+  },
+  "scripts": {
+    "bundle:ffmpeg": "python scripts/bundle_ffmpeg.py",
+    "build:backend": "python scripts/build_backend.py",
+    "build:frontend": "npm run build --prefix frontend",
+    "build": "npm run bundle:ffmpeg && npm run build:backend && npm run build:frontend",
+    "desktop:start": "electron .",
+    "dist": "electron-builder --config electron-builder.json",
+    "checksum": "python scripts/generate_checksums.py"
+  },
+  "devDependencies": {
+    "electron": "^34.5.8",
+    "electron-builder": "^25.1.8"
+  }
+}
