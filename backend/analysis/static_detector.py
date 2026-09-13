@@ -67,47 +67,74 @@ class StaticImageDetector:
         dhash_diffs = []
         noise_variances = []
 
+        max_diffs = []
+
         for i in range(len(frames) - 1):
-            _, bgr1, gray1 = frames[i]
-            _, bgr2, gray2 = frames[i + 1]
+            try:
+                _, bgr1, gray1 = frames[i]
+                _, bgr2, gray2 = frames[i + 1]
 
-            # 1. SSIM
-            ssim_val = compute_ssim_approx(gray1, gray2)
-            ssim_scores.append(ssim_val)
+                if gray1 is None or gray2 is None or gray1.size == 0 or gray2.size == 0:
+                    continue
+                if gray1.shape != gray2.shape:
+                    continue
 
-            # 2. Mean and max absolute pixel difference
-            abs_diff = cv2.absdiff(gray1, gray2)
-            mean_diff = float(np.mean(abs_diff))
-            max_diff = float(np.max(abs_diff))
-            pixel_diffs.append(mean_diff)
+                # 1. SSIM
+                ssim_val = compute_ssim_approx(gray1, gray2)
+                ssim_scores.append(ssim_val)
 
-            # 3. Temporal sensor noise in smooth regions
-            flat_mask = abs_diff < 10
-            if np.sum(flat_mask) > 100:
-                temporal_noise = float(np.std(abs_diff[flat_mask]))
-            else:
-                temporal_noise = float(np.std(abs_diff))
-            noise_variances.append(temporal_noise)
+                # 2. Mean and max absolute pixel difference
+                abs_diff = cv2.absdiff(gray1, gray2)
+                mean_diff = float(np.mean(abs_diff))
+                curr_max_diff = float(np.max(abs_diff))
+                pixel_diffs.append(mean_diff)
+                max_diffs.append(curr_max_diff)
 
-            # 4. dHash distance
-            h1 = compute_dhash(gray1)
-            h2 = compute_dhash(gray2)
-            dhash_diffs.append(hamming_distance(h1, h2))
+                # 3. Temporal sensor noise in smooth regions
+                flat_mask = abs_diff < 10
+                if np.sum(flat_mask) > 100:
+                    temporal_noise = float(np.std(abs_diff[flat_mask]))
+                else:
+                    temporal_noise = float(np.std(abs_diff))
+                noise_variances.append(temporal_noise)
 
-            # 5. Color histogram correlation
-            h_bins, s_bins = 16, 16
-            hist1 = cv2.calcHist([cv2.cvtColor(bgr1, cv2.COLOR_BGR2HSV)], [0, 1], None, [h_bins, s_bins], [0, 180, 0, 256])
-            hist2 = cv2.calcHist([cv2.cvtColor(bgr2, cv2.COLOR_BGR2HSV)], [0, 1], None, [h_bins, s_bins], [0, 180, 0, 256])
-            cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
-            cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
-            corr = float(cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL))
-            hist_corrs.append(corr)
+                # 4. dHash distance
+                h1 = compute_dhash(gray1)
+                h2 = compute_dhash(gray2)
+                dhash_diffs.append(hamming_distance(h1, h2))
+
+                # 5. Color histogram correlation
+                if bgr1 is not None and bgr2 is not None and bgr1.shape == bgr2.shape:
+                    h_bins, s_bins = 16, 16
+                    hist1 = cv2.calcHist([cv2.cvtColor(bgr1, cv2.COLOR_BGR2HSV)], [0, 1], None, [h_bins, s_bins], [0, 180, 0, 256])
+                    hist2 = cv2.calcHist([cv2.cvtColor(bgr2, cv2.COLOR_BGR2HSV)], [0, 1], None, [h_bins, s_bins], [0, 180, 0, 256])
+                    cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+                    cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+                    corr = float(cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL))
+                    hist_corrs.append(corr)
+                else:
+                    hist_corrs.append(1.0)
+            except Exception:
+                continue
+
+        if not ssim_scores:
+            return {
+                "is_static": False,
+                "confidence": 0.0,
+                "avg_ssim": 0.0,
+                "avg_pixel_diff": 100.0,
+                "max_pixel_diff": 0.0,
+                "avg_hist_corr": 0.0,
+                "avg_dhash_dist": 20.0,
+                "temporal_noise": 5.0
+            }
 
         avg_ssim = float(np.mean(ssim_scores))
         avg_pixel_diff = float(np.mean(pixel_diffs))
-        avg_hist_corr = float(np.mean(hist_corrs))
-        avg_dhash_dist = float(np.mean(dhash_diffs))
-        avg_noise = float(np.mean(noise_variances))
+        avg_hist_corr = float(np.mean(hist_corrs)) if hist_corrs else 1.0
+        avg_dhash_dist = float(np.mean(dhash_diffs)) if dhash_diffs else 20.0
+        avg_noise = float(np.mean(noise_variances)) if noise_variances else 5.0
+        max_diff = float(np.max(max_diffs)) if max_diffs else 0.0
 
         # Confidence calculation
         confidence = 0.0

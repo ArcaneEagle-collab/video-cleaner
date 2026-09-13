@@ -70,6 +70,8 @@ class VideoFrameSampler:
         times = np.linspace(start_sec, end_sec, count)
         for t in times:
             frame_num = int(t * self.native_fps)
+            if self.total_frames > 0:
+                frame_num = min(self.total_frames - 1, max(0, frame_num))
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
             ret, frame = self.cap.read()
             if ret and frame is not None:
@@ -86,7 +88,7 @@ class VideoFrameSampler:
         pairs = []
         dur = end_sec - start_sec
         if dur <= dt:
-            dt = dur * 0.5
+            dt = max(0.04, dur * 0.5)
 
         # Pick checkpoints across the scene (e.g. 20%, 50%, 80%)
         if pair_count == 1:
@@ -100,6 +102,13 @@ class VideoFrameSampler:
 
             f1_idx = int(t1 * self.native_fps)
             f2_idx = int(t2 * self.native_fps)
+
+            if self.total_frames > 1:
+                f1_idx = min(self.total_frames - 2, max(0, f1_idx))
+                f2_idx = min(self.total_frames - 1, max(f1_idx + 1, f2_idx))
+            else:
+                f1_idx = max(0, f1_idx)
+                f2_idx = max(0, f2_idx)
 
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, f1_idx)
             ret1, frame1 = self.cap.read()

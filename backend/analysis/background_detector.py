@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 class ImageWithBackgroundDetector:
     """
@@ -14,8 +14,166 @@ class ImageWithBackgroundDetector:
     7. Solid Letterbox / Pillarbox Bars with Still Photo
     8. Cutout on Plain or Uniform Backdrop
     """
-    def __init__(self, margin_ratio: float = 0.08):
-        self.margin_ratio = margin_ratio
+    def _compute_pair_stats(self, f1_bgr: np.ndarray, g1: np.ndarray, g2: np.ndarray) -> Optional[Dict[str, Any]]:
+        h, w = g1.shape
+        diff = cv2.absdiff(g1, g2)
+        flow = cv2.calcOpticalFlowFarneback(g1, g2, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+        u, v = flow[..., 0], flow[..., 1]
+        mag = np.hypot(u, v)
+
+        # -------------------------------------------------------------
+        # 1. Margins Analysis (Outer 8% on all 4 sides)
+        # -------------------------------------------------------------
+        m_h = max(1, int(h * self.margin_ratio))
+        m_w = max(1, int(w * self.margin_ratio))
+
+        top_strip = f1_bgr[:m_h, :]
+        bot_strip = f1_bgr[-m_h:, :]
+        left_strip = f1_bgr[:, :m_w]
+        right_strip = f1_bgr[:, -m_w:]
+
+        top_b = float(np.mean(top_strip))
+        bot_b = float(np.mean(bot_strip))
+        left_b = float(np.mean(left_strip))
+        right_b = float(np.mean(right_strip))
+
+        tb_var = float((np.mean(np.var(top_strip, axis=(0, 1))) + np.mean(np.var(bot_strip, axis=(0, 1)))) / 2.0)
+        lr_var = float((np.mean(np.var(left_strip, axis=(0, 1))) + np.mean(np.var(right_strip, axis=(0, 1)))) / 2.0)
+
+        top_d = float(np.mean(diff[:m_h, :]))
+        bot_d = float(np.mean(diff[-m_h:, :]))
+        left_d = float(np.mean(diff[:, :m_w]))
+        right_d = float(np.mean(diff[:, -m_w:]))
+        margin_diff = (top_d + bot_d + left_d + right_d) / 4.0
+
+        # -------------------------------------------------------------
+        # 2. White Card / Polaroid / Canvas Borders (HSV Brightness & Sat)
+        # -------------------------------------------------------------
+        hsv = cv2.cvtColor(f1_bgr, cv2.COLOR_BGR2HSV)
+        white_mask = (hsv[..., 1] < 40) & (hsv[..., 2] > 210)
+        white_ratio = float(np.mean(white_mask))
+
+        # Saturated News Ribbon / Banner in Lower 40%
+        bot_hsv = hsv[int(h * 0.60):, :]
+        blue_mask = (bot_hsv[..., 0] >= 100) & (bot_hsv[..., 0] <= 130) & (bot_hsv[..., 1] > 115) & (bot_hsv[..., 2] > 70)
+        blue_ratio = float(np.mean(blue_mask))
+
+        # Straight Border Lines for Card Frames (Hough Transform)
+        edges = cv2.Canny(g1, 50, 150)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=70, minLineLength=int(min(h, w) * 0.22), maxLineGap=10)
+        perpendicular_corners = 0
+        if lines is not None and len(lines) >= 2:
+            angles = []
+            for l in lines:
+                pts = l[0] if len(l.shape) > 1 else l
+                angles.append(np.degrees(np.arctan2(pts[3] - pts[1], pts[2] - pts[0])) % 180)
+            for a1 in angles:
+                for a2 in angles:
+                    diff_a = abs(a1 - a2)
+                    if 82 < diff_a < 98:
+                        perpendicular_corners += 1
+
+        # -------------------------------------------------------------
+        # 3. Top 70% vs Bottom 30% Motion Disparity
+        # -------------------------------------------------------------
+        top_h = int(h * 0.70)
+        top_m = mag[:top_h, :]
+        bot_m = mag[top_h:, :]
+
+        top_zero = float(np.mean(top_m < 0.25))
+        top_mag = float(np.mean(top_m))
+        bot_mag = float(np.mean(bot_m))
+
+        # Affine RANSAC on Top 70%
+        y_x_top = np.mgrid[0:top_h:8, 0:w:8]
+        p1_top = np.vstack((y_x_top[1].ravel(), y_x_top[0].ravel())).T.astype(np.float32)
+        su_top = u[:top_h:8, ::8].ravel()
+        sv_top = v[:top_h:8, ::8].ravel()
+        p2_top = p1_top + np.vstack((su_top, sv_top)).T.astype(np.float32)
+
+        top_res = 99.0
+        top_inl_ratio = 0.0
+        if len(p1_top) >= 6 and len(p2_top) >= 6:
+            top_M, top_inl = cv2.estimateAffinePartial2D(p1_top, p2_top, method=cv2.RANSAC, ransacReprojThreshold=1.2)
+            if top_M is not None and top_inl is not None and len(top_inl) > 0:
+                pred_top = cv2.transform(p1_top.reshape(-1, 1, 2), top_M).reshape(-1, 2)
+                top_res = float(np.linalg.norm(p2_top - pred_top, axis=1).mean())
+                top_inl_ratio = float(top_inl.mean())
+
+        # -------------------------------------------------------------
+        # 4. Center Inset Box (Inner 65% x 65%)
+        # -------------------------------------------------------------
+        cen_y1, cen_y2 = int(h * 0.18), int(h * 0.82)
+        cen_x1, cen_x2 = int(w * 0.18), int(w * 0.82)
+        cen_m = mag[cen_y1:cen_y2, cen_x1:cen_x2]
+        cen_zero = float(np.mean(cen_m < 0.25))
+        cen_mag = float(np.mean(cen_m))
+
+        border_mask = np.ones((h, w), dtype=bool)
+        border_mask[cen_y1:cen_y2, cen_x1:cen_x2] = False
+        bdr_mag = float(np.mean(mag[border_mask]))
+
+        # Affine RANSAC on Center Box
+        y_x = np.mgrid[0:h:8, 0:w:8]
+        p1 = np.vstack((y_x[1].ravel(), y_x[0].ravel())).T.astype(np.float32)
+        su = u[::8, ::8].ravel()
+        sv = v[::8, ::8].ravel()
+        p2 = p1 + np.vstack((su, sv)).T.astype(np.float32)
+
+        cen_pts_mask = (p1[:, 1] >= cen_y1) & (p1[:, 1] < cen_y2) & (p1[:, 0] >= cen_x1) & (p1[:, 0] < cen_x2)
+        cen_p1 = p1[cen_pts_mask]
+        cen_p2 = p2[cen_pts_mask]
+        cen_res = 99.0
+        cen_inl_ratio = 0.0
+        if len(cen_p1) >= 6 and len(cen_p2) >= 6:
+            cen_M, cen_inl = cv2.estimateAffinePartial2D(cen_p1, cen_p2, method=cv2.RANSAC, ransacReprojThreshold=1.2)
+            if cen_M is not None and cen_inl is not None and len(cen_inl) > 0:
+                pred_cen = cv2.transform(cen_p1.reshape(-1, 1, 2), cen_M).reshape(-1, 2)
+                cen_res = float(np.linalg.norm(cen_p2 - pred_cen, axis=1).mean())
+                cen_inl_ratio = float(cen_inl.mean())
+
+        # -------------------------------------------------------------
+        # 5. Split-screen / Center Dividing Line Check
+        # -------------------------------------------------------------
+        sobel_x = np.abs(cv2.Sobel(g1, cv2.CV_64F, 1, 0, ksize=3))
+        col_profile = np.mean(sobel_x, axis=0)
+        center_col_band = col_profile[int(w * 0.46):int(w * 0.54)]
+        mid_split_peak = float(np.max(center_col_band)) / max(1.0, float(np.mean(col_profile)))
+
+        center_slice = sobel_x[:, int(w * 0.46):int(w * 0.54)]
+        col_sums = np.sum(center_slice, axis=0)
+        best_col_idx = np.argmax(col_sums)
+        best_col = center_slice[:, best_col_idx]
+        split_continuity = float(np.mean(best_col > 35.0))
+
+        left_half_zero = float(np.mean(mag[:, :w // 2] < 0.25))
+        right_half_zero = float(np.mean(mag[:, w // 2:] < 0.25))
+        left_half_mag = float(np.mean(mag[:, :w // 2]))
+        right_half_mag = float(np.mean(mag[:, w // 2:]))
+
+        # -------------------------------------------------------------
+        # 6. Blurred Duplicate Background (Wings / Bokeh Pillarbox)
+        # -------------------------------------------------------------
+        left_w = int(w * 0.20)
+        right_w = int(w * 0.80)
+        cen_lap = float(cv2.Laplacian(g1[:, left_w:right_w], cv2.CV_64F).var())
+        wings_lap = float((cv2.Laplacian(g1[:, :left_w], cv2.CV_64F).var() + cv2.Laplacian(g1[:, right_w:], cv2.CV_64F).var()) / 2.0)
+        wings_color_var = float((np.mean(np.var(f1_bgr[:, :left_w], axis=(0, 1))) + np.mean(np.var(f1_bgr[:, right_w:], axis=(0, 1)))) / 2.0)
+
+        return {
+            "top_b": top_b, "bot_b": bot_b, "left_b": left_b, "right_b": right_b,
+            "tb_var": tb_var, "lr_var": lr_var, "margin_diff": margin_diff, "top_d": top_d,
+            "white_ratio": white_ratio, "blue_ratio": blue_ratio,
+            "perpendicular_corners": perpendicular_corners,
+            "top_zero": top_zero, "top_mag": top_mag, "bot_mag": bot_mag,
+            "top_inl": top_inl_ratio, "top_res": top_res,
+            "cen_zero": cen_zero, "cen_mag": cen_mag, "bdr_mag": bdr_mag,
+            "cen_inl": cen_inl_ratio, "cen_res": cen_res,
+            "mid_split_peak": mid_split_peak, "split_continuity": split_continuity,
+            "left_half_zero": left_half_zero, "right_half_zero": right_half_zero,
+            "left_half_mag": left_half_mag, "right_half_mag": right_half_mag,
+            "cen_lap": cen_lap, "wings_lap": wings_lap, "wings_color_var": wings_color_var
+        }
 
     def analyze_fine_pairs(self, pairs: List[Tuple[float, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]) -> Dict[str, Any]:
         """
@@ -28,163 +186,20 @@ class ImageWithBackgroundDetector:
         pair_stats = []
 
         for _, f1_bgr, g1, _, g2 in pairs:
-            h, w = g1.shape
-            diff = cv2.absdiff(g1, g2)
-            flow = cv2.calcOpticalFlowFarneback(g1, g2, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-            u, v = flow[..., 0], flow[..., 1]
-            mag = np.hypot(u, v)
+            if f1_bgr is None or g1 is None or g2 is None or g1.size == 0 or g2.size == 0:
+                continue
+            if g1.shape != g2.shape:
+                continue
 
-            # -------------------------------------------------------------
-            # 1. Margins Analysis (Outer 8% on all 4 sides)
-            # -------------------------------------------------------------
-            m_h = max(1, int(h * self.margin_ratio))
-            m_w = max(1, int(w * self.margin_ratio))
+            try:
+                st = self._compute_pair_stats(f1_bgr, g1, g2)
+                if st:
+                    pair_stats.append(st)
+            except Exception:
+                continue
 
-            top_strip = f1_bgr[:m_h, :]
-            bot_strip = f1_bgr[-m_h:, :]
-            left_strip = f1_bgr[:, :m_w]
-            right_strip = f1_bgr[:, -m_w:]
-
-            top_b = float(np.mean(top_strip))
-            bot_b = float(np.mean(bot_strip))
-            left_b = float(np.mean(left_strip))
-            right_b = float(np.mean(right_strip))
-
-            tb_var = float((np.mean(np.var(top_strip, axis=(0, 1))) + np.mean(np.var(bot_strip, axis=(0, 1)))) / 2.0)
-            lr_var = float((np.mean(np.var(left_strip, axis=(0, 1))) + np.mean(np.var(right_strip, axis=(0, 1)))) / 2.0)
-
-            top_d = float(np.mean(diff[:m_h, :]))
-            bot_d = float(np.mean(diff[-m_h:, :]))
-            left_d = float(np.mean(diff[:, :m_w]))
-            right_d = float(np.mean(diff[:, -m_w:]))
-            margin_diff = (top_d + bot_d + left_d + right_d) / 4.0
-
-            # -------------------------------------------------------------
-            # 2. White Card / Polaroid / Canvas Borders (HSV Brightness & Sat)
-            # -------------------------------------------------------------
-            hsv = cv2.cvtColor(f1_bgr, cv2.COLOR_BGR2HSV)
-            white_mask = (hsv[..., 1] < 40) & (hsv[..., 2] > 210)
-            white_ratio = float(np.mean(white_mask))
-
-            # Saturated News Ribbon / Banner in Lower 40%
-            bot_hsv = hsv[int(h * 0.60):, :]
-            blue_mask = (bot_hsv[..., 0] >= 100) & (bot_hsv[..., 0] <= 130) & (bot_hsv[..., 1] > 115) & (bot_hsv[..., 2] > 70)
-            blue_ratio = float(np.mean(blue_mask))
-
-            # Straight Border Lines for Card Frames (Hough Transform)
-            edges = cv2.Canny(g1, 50, 150)
-            lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=70, minLineLength=int(min(h, w) * 0.22), maxLineGap=10)
-            perpendicular_corners = 0
-            if lines is not None and len(lines) >= 2:
-                angles = []
-                for l in lines:
-                    pts = l[0] if len(l.shape) > 1 else l
-                    angles.append(np.degrees(np.arctan2(pts[3] - pts[1], pts[2] - pts[0])) % 180)
-                for a1 in angles:
-                    for a2 in angles:
-                        diff_a = abs(a1 - a2)
-                        if 82 < diff_a < 98:
-                            perpendicular_corners += 1
-
-            # -------------------------------------------------------------
-            # 3. Top 70% vs Bottom 30% Motion Disparity
-            # -------------------------------------------------------------
-            top_h = int(h * 0.70)
-            top_m = mag[:top_h, :]
-            bot_m = mag[top_h:, :]
-
-            top_zero = float(np.mean(top_m < 0.25))
-            top_mag = float(np.mean(top_m))
-            bot_mag = float(np.mean(bot_m))
-
-            # Affine RANSAC on Top 70%
-            y_x_top = np.mgrid[0:top_h:8, 0:w:8]
-            p1_top = np.vstack((y_x_top[1].ravel(), y_x_top[0].ravel())).T.astype(np.float32)
-            su_top = u[:top_h:8, ::8].ravel()
-            sv_top = v[:top_h:8, ::8].ravel()
-            p2_top = p1_top + np.vstack((su_top, sv_top)).T.astype(np.float32)
-
-            top_M, top_inl = cv2.estimateAffinePartial2D(p1_top, p2_top, method=cv2.RANSAC, ransacReprojThreshold=1.2)
-            top_res = 99.0
-            top_inl_ratio = 0.0
-            if top_M is not None and top_inl is not None:
-                pred_top = cv2.transform(p1_top.reshape(-1, 1, 2), top_M).reshape(-1, 2)
-                top_res = float(np.linalg.norm(p2_top - pred_top, axis=1).mean())
-                top_inl_ratio = float(top_inl.mean())
-
-            # -------------------------------------------------------------
-            # 4. Center Inset Box (Inner 65% x 65%)
-            # -------------------------------------------------------------
-            cen_y1, cen_y2 = int(h * 0.18), int(h * 0.82)
-            cen_x1, cen_x2 = int(w * 0.18), int(w * 0.82)
-            cen_m = mag[cen_y1:cen_y2, cen_x1:cen_x2]
-            cen_zero = float(np.mean(cen_m < 0.25))
-            cen_mag = float(np.mean(cen_m))
-
-            border_mask = np.ones((h, w), dtype=bool)
-            border_mask[cen_y1:cen_y2, cen_x1:cen_x2] = False
-            bdr_mag = float(np.mean(mag[border_mask]))
-
-            # Affine RANSAC on Center Box
-            y_x = np.mgrid[0:h:8, 0:w:8]
-            p1 = np.vstack((y_x[1].ravel(), y_x[0].ravel())).T.astype(np.float32)
-            su = u[::8, ::8].ravel()
-            sv = v[::8, ::8].ravel()
-            p2 = p1 + np.vstack((su, sv)).T.astype(np.float32)
-
-            cen_pts_mask = (p1[:, 1] >= cen_y1) & (p1[:, 1] < cen_y2) & (p1[:, 0] >= cen_x1) & (p1[:, 0] < cen_x2)
-            cen_p1 = p1[cen_pts_mask]
-            cen_p2 = p2[cen_pts_mask]
-            cen_M, cen_inl = cv2.estimateAffinePartial2D(cen_p1, cen_p2, method=cv2.RANSAC, ransacReprojThreshold=1.2)
-            cen_res = 99.0
-            cen_inl_ratio = 0.0
-            if cen_M is not None and cen_inl is not None:
-                pred_cen = cv2.transform(cen_p1.reshape(-1, 1, 2), cen_M).reshape(-1, 2)
-                cen_res = float(np.linalg.norm(cen_p2 - pred_cen, axis=1).mean())
-                cen_inl_ratio = float(cen_inl.mean())
-
-            # -------------------------------------------------------------
-            # 5. Split-screen / Center Dividing Line Check
-            # -------------------------------------------------------------
-            sobel_x = np.abs(cv2.Sobel(g1, cv2.CV_64F, 1, 0, ksize=3))
-            col_profile = np.mean(sobel_x, axis=0)
-            center_col_band = col_profile[int(w * 0.46):int(w * 0.54)]
-            mid_split_peak = float(np.max(center_col_band)) / max(1.0, float(np.mean(col_profile)))
-
-            center_slice = sobel_x[:, int(w * 0.46):int(w * 0.54)]
-            col_sums = np.sum(center_slice, axis=0)
-            best_col_idx = np.argmax(col_sums)
-            best_col = center_slice[:, best_col_idx]
-            split_continuity = float(np.mean(best_col > 35.0))
-
-            left_half_zero = float(np.mean(mag[:, :w // 2] < 0.25))
-            right_half_zero = float(np.mean(mag[:, w // 2:] < 0.25))
-            left_half_mag = float(np.mean(mag[:, :w // 2]))
-            right_half_mag = float(np.mean(mag[:, w // 2:]))
-
-            # -------------------------------------------------------------
-            # 6. Blurred Duplicate Background (Wings / Bokeh Pillarbox)
-            # -------------------------------------------------------------
-            left_w = int(w * 0.20)
-            right_w = int(w * 0.80)
-            cen_lap = float(cv2.Laplacian(g1[:, left_w:right_w], cv2.CV_64F).var())
-            wings_lap = float((cv2.Laplacian(g1[:, :left_w], cv2.CV_64F).var() + cv2.Laplacian(g1[:, right_w:], cv2.CV_64F).var()) / 2.0)
-            wings_color_var = float((np.mean(np.var(f1_bgr[:, :left_w], axis=(0, 1))) + np.mean(np.var(f1_bgr[:, right_w:], axis=(0, 1)))) / 2.0)
-
-            pair_stats.append({
-                "top_b": top_b, "bot_b": bot_b, "left_b": left_b, "right_b": right_b,
-                "tb_var": tb_var, "lr_var": lr_var, "margin_diff": margin_diff, "top_d": top_d,
-                "white_ratio": white_ratio, "blue_ratio": blue_ratio,
-                "perpendicular_corners": perpendicular_corners,
-                "top_zero": top_zero, "top_mag": top_mag, "bot_mag": bot_mag,
-                "top_inl": top_inl_ratio, "top_res": top_res,
-                "cen_zero": cen_zero, "cen_mag": cen_mag, "bdr_mag": bdr_mag,
-                "cen_inl": cen_inl_ratio, "cen_res": cen_res,
-                "mid_split_peak": mid_split_peak, "split_continuity": split_continuity,
-                "left_half_zero": left_half_zero, "right_half_zero": right_half_zero,
-                "left_half_mag": left_half_mag, "right_half_mag": right_half_mag,
-                "cen_lap": cen_lap, "wings_lap": wings_lap, "wings_color_var": wings_color_var
-            })
+        if not pair_stats:
+            return {"detected": False, "confidence": 0.0, "type": "NONE", "bg_type": "NONE", "reason": ""}
 
         avg = {k: float(np.mean([p[k] for p in pair_stats])) for k in pair_stats[0]}
 

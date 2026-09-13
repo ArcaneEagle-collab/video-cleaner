@@ -27,57 +27,73 @@ class ZoomPanDetector:
         pan_mags = []
 
         for _, _, gray1, _, gray2 in pairs:
-            flow = cv2.calcOpticalFlowFarneback(
-                gray1, gray2, None,
-                pyr_scale=0.5, levels=3, winsize=15,
-                iterations=3, poly_n=5, poly_sigma=1.2, flags=0
-            )
+            try:
+                if gray1 is None or gray2 is None or gray1.size == 0 or gray2.size == 0:
+                    continue
+                if gray1.shape != gray2.shape:
+                    continue
 
-            u = flow[..., 0]
-            v = flow[..., 1]
-            mag = np.hypot(u, v)
+                flow = cv2.calcOpticalFlowFarneback(
+                    gray1, gray2, None,
+                    pyr_scale=0.5, levels=3, winsize=15,
+                    iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+                )
 
-            mean_mag = float(np.mean(mag))
-            if mean_mag < 0.04:
+                u = flow[..., 0]
+                v = flow[..., 1]
+                mag = np.hypot(u, v)
+
+                mean_mag = float(np.mean(mag))
+                if mean_mag < 0.04 or not np.isfinite(mean_mag):
+                    continue
+
+                h, w = gray1.shape
+                y_coords, x_coords = np.mgrid[0:h:8, 0:w:8]
+                pts1 = np.vstack((x_coords.ravel(), y_coords.ravel())).T.astype(np.float32)
+                sampled_u = u[::8, ::8].ravel()
+                sampled_v = v[::8, ::8].ravel()
+
+                if not (np.all(np.isfinite(sampled_u)) and np.all(np.isfinite(sampled_v))):
+                    continue
+
+                pts2 = pts1 + np.vstack((sampled_u, sampled_v)).T.astype(np.float32)
+                if len(pts1) < 6 or len(pts2) < 6:
+                    continue
+
+                affine_matrix, inliers = cv2.estimateAffinePartial2D(
+                    pts1, pts2, method=cv2.RANSAC, ransacReprojThreshold=1.2
+                )
+
+                if affine_matrix is not None and inliers is not None and len(inliers) > 0:
+                    a, b = affine_matrix[0, 0], affine_matrix[0, 1]
+                    scale = float(np.sqrt(a * a + b * b))
+                    if not np.isfinite(scale):
+                        continue
+                    scale_changes.append(scale)
+
+                    tx, ty = float(affine_matrix[0, 2]), float(affine_matrix[1, 2])
+                    pan_mags.append(float(np.hypot(tx, ty)))
+
+                    pred_pts2 = cv2.transform(pts1.reshape(-1, 1, 2), affine_matrix).reshape(-1, 2)
+                    err = np.linalg.norm(pts2 - pred_pts2, axis=1)
+                    residuals.append(float(np.mean(err)))
+                    inliers_list.append(float(np.mean(inliers)))
+
+                    # Radial dot product
+                    y_grid, x_grid = np.indices((h, w))
+                    rx = x_grid - (w / 2.0)
+                    ry = y_grid - (h / 2.0)
+                    radial_dot = (u * rx + v * ry)
+                    divergences.append(float(np.mean(radial_dot > 0)))
+            except Exception:
                 continue
-
-            h, w = gray1.shape
-            y_coords, x_coords = np.mgrid[0:h:8, 0:w:8]
-            pts1 = np.vstack((x_coords.ravel(), y_coords.ravel())).T.astype(np.float32)
-            sampled_u = u[::8, ::8].ravel()
-            sampled_v = v[::8, ::8].ravel()
-            pts2 = pts1 + np.vstack((sampled_u, sampled_v)).T.astype(np.float32)
-
-            affine_matrix, inliers = cv2.estimateAffinePartial2D(
-                pts1, pts2, method=cv2.RANSAC, ransacReprojThreshold=1.2
-            )
-
-            if affine_matrix is not None and inliers is not None:
-                a, b = affine_matrix[0, 0], affine_matrix[0, 1]
-                scale = float(np.sqrt(a * a + b * b))
-                scale_changes.append(scale)
-
-                tx, ty = float(affine_matrix[0, 2]), float(affine_matrix[1, 2])
-                pan_mags.append(float(np.hypot(tx, ty)))
-
-                pred_pts2 = cv2.transform(pts1.reshape(-1, 1, 2), affine_matrix).reshape(-1, 2)
-                err = np.linalg.norm(pts2 - pred_pts2, axis=1)
-                residuals.append(float(np.mean(err)))
-                inliers_list.append(float(np.mean(inliers)))
-
-                # Radial dot product
-                y_grid, x_grid = np.indices((h, w))
-                rx = x_grid - (w / 2.0)
-                ry = y_grid - (h / 2.0)
-                radial_dot = (u * rx + v * ry)
-                divergences.append(float(np.mean(radial_dot > 0)))
 
         if not scale_changes:
             return {"detected": False, "type": "NONE", "confidence": 0.0, "residual_error": 5.0}
 
         avg_scale = float(np.mean(scale_changes))
-        avg_residual = float(np.mean(residuals))
-        avg_inliers = float(np.mean(inliers_list))
+        avg_residual = float(np.mean(residuals)) if residuals else 5.0
+        avg_inliers = float(np.mean(inliers_list)) if inliers_list else 0.0
         avg_radial = float(np.mean(divergences)) if divergences else 0.5
         avg_pan = float(np.mean(pan_mags)) if pan_mags else 0.0
 
@@ -109,6 +125,22 @@ class ZoomPanDetector:
             "inliers": round(avg_inliers, 3)
         }
 
+    def analyze_frames(self, frames: List[Tuple[float, np.ndarray, np.ndarray]]) -> Dict[str, Any]:
+        """
+        Analyzes consecutive frames (t, bgr, gray) for Ken Burns zoom, pan, and slide effects.
+        Fallback when fine-pair sampling is unavailable or has insufficient pairs.
+        """
+        if not frames or len(frames) < 2:
+            return {
+                "detected": False,
+                "type": "NONE",
+                "confidence": 0.0,
+                "scale_change": 1.0,
+                "divergence": 0.5,
+                "residual_error": 5.0,
+                "flow_uniformity": 0.0
+            }
+
         scale_changes = []
         divergences = []
         residuals = []
@@ -116,70 +148,74 @@ class ZoomPanDetector:
         pan_vectors = []
 
         for i in range(len(frames) - 1):
-            _, _, gray1 = frames[i]
-            _, _, gray2 = frames[i + 1]
+            try:
+                _, _, gray1 = frames[i]
+                _, _, gray2 = frames[i + 1]
 
-            # Calculate dense optical flow (Farneback)
-            # Parameters tuned for fast, smooth global motion estimation
-            flow = cv2.calcOpticalFlowFarneback(
-                gray1, gray2, None,
-                pyr_scale=0.5, levels=3, winsize=15,
-                iterations=3, poly_n=5, poly_sigma=1.2, flags=0
-            )
+                if gray1 is None or gray2 is None or gray1.size == 0 or gray2.size == 0:
+                    continue
+                if gray1.shape != gray2.shape:
+                    continue
 
-            u = flow[..., 0]
-            v = flow[..., 1]
-            mag, ang = cv2.cartToPolar(u, v)
+                # Calculate dense optical flow (Farneback)
+                flow = cv2.calcOpticalFlowFarneback(
+                    gray1, gray2, None,
+                    pyr_scale=0.5, levels=3, winsize=15,
+                    iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+                )
 
-            mean_mag = float(np.mean(mag))
-            # If there's virtually no motion at all (< 0.05 px), this is static, not zoom/pan
-            if mean_mag < 0.05:
+                u = flow[..., 0]
+                v = flow[..., 1]
+                mag, ang = cv2.cartToPolar(u, v)
+
+                mean_mag = float(np.mean(mag))
+                if mean_mag < 0.05 or not np.isfinite(mean_mag):
+                    continue
+
+                h, w = gray1.shape
+                y_coords, x_coords = np.mgrid[0:h:8, 0:w:8]
+                pts1 = np.vstack((x_coords.ravel(), y_coords.ravel())).T.astype(np.float32)
+                sampled_u = u[::8, ::8].ravel()
+                sampled_v = v[::8, ::8].ravel()
+
+                if not (np.all(np.isfinite(sampled_u)) and np.all(np.isfinite(sampled_v))):
+                    continue
+
+                pts2 = pts1 + np.vstack((sampled_u, sampled_v)).T.astype(np.float32)
+                if len(pts1) < 6 or len(pts2) < 6:
+                    continue
+
+                # Estimate partial affine (scale, rotation, translation - 4 DOF)
+                affine_matrix, inliers = cv2.estimateAffinePartial2D(
+                    pts1, pts2, method=cv2.RANSAC, ransacReprojThreshold=1.5
+                )
+
+                if affine_matrix is not None and inliers is not None and len(inliers) > 0:
+                    a, b = affine_matrix[0, 0], affine_matrix[0, 1]
+                    scale = float(np.sqrt(a * a + b * b))
+                    if not np.isfinite(scale):
+                        continue
+                    scale_changes.append(scale)
+
+                    tx, ty = float(affine_matrix[0, 2]), float(affine_matrix[1, 2])
+                    pan_vectors.append((tx, ty))
+
+                    pred_pts2 = cv2.transform(pts1.reshape(-1, 1, 2), affine_matrix).reshape(-1, 2)
+                    err = np.linalg.norm(pts2 - pred_pts2, axis=1)
+                    mean_err = float(np.mean(err))
+                    residuals.append(mean_err)
+
+                    angle_std = float(np.std(ang[::8, ::8]))
+                    flow_uniformities.append(angle_std)
+
+                    y_grid, x_grid = np.indices((h, w))
+                    rx = x_grid - (w / 2.0)
+                    ry = y_grid - (h / 2.0)
+                    radial_dot = (u * rx + v * ry)
+                    pos_radial_ratio = float(np.mean(radial_dot > 0))
+                    divergences.append(pos_radial_ratio)
+            except Exception:
                 continue
-
-            h, w = gray1.shape
-            y_coords, x_coords = np.mgrid[0:h:8, 0:w:8]
-            pts1 = np.vstack((x_coords.ravel(), y_coords.ravel())).T.astype(np.float32)
-            sampled_u = u[::8, ::8].ravel()
-            sampled_v = v[::8, ::8].ravel()
-            pts2 = pts1 + np.vstack((sampled_u, sampled_v)).T.astype(np.float32)
-
-            # Estimate partial affine (scale, rotation, translation - 4 DOF)
-            affine_matrix, inliers = cv2.estimateAffinePartial2D(
-                pts1, pts2, method=cv2.RANSAC, ransacReprojThreshold=1.5
-            )
-
-            if affine_matrix is not None:
-                # Extract scale factor: sqrt(det(A))
-                a, b = affine_matrix[0, 0], affine_matrix[0, 1]
-                scale = float(np.sqrt(a * a + b * b))
-                scale_changes.append(scale)
-
-                tx, ty = float(affine_matrix[0, 2]), float(affine_matrix[1, 2])
-                pan_vectors.append((tx, ty))
-
-                # Compute residual error: how well the 2D affine model explains the entire flow field
-                # In synthetic zoom/pan of a still photo: residual is tiny (< 0.6 px) and inlier ratio is > 90%
-                # In real camera video: 3D parallax and independent motion create high residual (> 1.5 px)
-                pred_pts2 = cv2.transform(pts1.reshape(-1, 1, 2), affine_matrix).reshape(-1, 2)
-                err = np.linalg.norm(pts2 - pred_pts2, axis=1)
-                mean_err = float(np.mean(err))
-                residuals.append(mean_err)
-
-                # Compute flow uniformity (angle consistency for panning)
-                # If all vectors point in the same direction, std of angle is low
-                angle_std = float(np.std(ang[::8, ::8]))
-                flow_uniformities.append(angle_std)
-
-                # 4. Optical flow divergence and radial dot product
-                # In Ken Burns zoom-in, flow radiates outward from center: (u*rx + v*ry) > 0
-                # In Ken Burns zoom-out, flow radiates inward toward center: (u*rx + v*ry) < 0
-                # In Ken Burns pan/slide, flow is highly unidirectional across entire frame
-                y_grid, x_grid = np.indices((h, w))
-                rx = x_grid - (w / 2.0)
-                ry = y_grid - (h / 2.0)
-                radial_dot = (u * rx + v * ry)
-                pos_radial_ratio = float(np.mean(radial_dot > 0))
-                divergences.append(pos_radial_ratio)
 
         if not scale_changes:
             return {

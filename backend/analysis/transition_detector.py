@@ -25,22 +25,31 @@ class TransitionDetector:
         hist_diffs = []
 
         for i, (_, bgr, gray) in enumerate(frames):
-            mean_lum = float(np.mean(gray))
-            luminances.append(mean_lum)
+            try:
+                if gray is None or gray.size == 0:
+                    continue
+                mean_lum = float(np.mean(gray))
+                luminances.append(mean_lum)
 
-            # Edge energy (Laplacian variance)
-            lap = cv2.Laplacian(gray, cv2.CV_64F)
-            edge_energy = float(np.var(lap))
-            edge_energies.append(edge_energy)
+                # Edge energy (Laplacian variance)
+                lap = cv2.Laplacian(gray, cv2.CV_64F)
+                edge_energy = float(np.var(lap))
+                edge_energies.append(edge_energy)
 
-            if i > 0:
-                _, _, prev_gray = frames[i - 1]
-                h1 = cv2.calcHist([prev_gray], [0], None, [32], [0, 256])
-                h2 = cv2.calcHist([gray], [0], None, [32], [0, 256])
-                cv2.normalize(h1, h1, 0, 1, cv2.NORM_MINMAX)
-                cv2.normalize(h2, h2, 0, 1, cv2.NORM_MINMAX)
-                corr = float(cv2.compareHist(h1, h2, cv2.HISTCMP_CORREL))
-                hist_diffs.append(1.0 - corr)
+                if i > 0:
+                    _, _, prev_gray = frames[i - 1]
+                    if prev_gray is not None and prev_gray.size > 0:
+                        h1 = cv2.calcHist([prev_gray], [0], None, [32], [0, 256])
+                        h2 = cv2.calcHist([gray], [0], None, [32], [0, 256])
+                        cv2.normalize(h1, h1, 0, 1, cv2.NORM_MINMAX)
+                        cv2.normalize(h2, h2, 0, 1, cv2.NORM_MINMAX)
+                        corr = float(cv2.compareHist(h1, h2, cv2.HISTCMP_CORREL))
+                        hist_diffs.append(1.0 - corr)
+            except Exception:
+                continue
+
+        if not luminances:
+            return {"detected": False, "type": "NONE", "confidence": 0.0, "reason": "No valid frames"}
 
         min_lum = min(luminances)
         max_lum = max(luminances)

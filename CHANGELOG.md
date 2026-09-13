@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.2] - 2026-09-13
+
+### Fixed
+- **Zoom/Pan Detector Exception**: Added missing `analyze_frames` method in `ZoomPanDetector`, eliminating `AttributeError` when fine-pair frame sampling yields no pairs on short cuts or near video ends.
+- **Detector Exception Boundaries**: Isolated all detector invocations (`ZoomPanDetector`, `StaticImageDetector`, `ImageWithBackgroundDetector`, `TransitionDetector`, `MotionDetector`) in defensive `try...except` blocks with safe default metrics to ensure video analysis never halts on corrupted or edge-case frames.
+- **Corrupt Frame & Dimension Validation**: Added shape and non-empty checks across all detector optical flow, affine transformation, and perceptual hash algorithms to eliminate OpenCV assertion failures and divide-by-zero runtime warnings.
+- **EOF Seeking Clamps**: Clamped frame extraction indices in `VideoFrameSampler` to prevent seeking past total frames at video extremities.
+- **Traceback Logging**: Added full traceback printing in `run_analysis_task` so errors are accurately captured in `backend.log`.
+
+---
+
 ## [1.0.1] - 2026-09-13
 
 ### Fixed

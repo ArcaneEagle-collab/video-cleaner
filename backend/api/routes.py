@@ -216,6 +216,11 @@ def run_analysis_task(task_id: str, req: AnalysisRequest):
                 "result": result
             }))
     except Exception as e:
+        import traceback
+        print(f"[ERROR] Analysis task {task_id} failed: {e}")
+        traceback.print_exc()
+        if hasattr(sys.stdout, "flush"):
+            sys.stdout.flush()
         loop.run_until_complete(ws_manager.broadcast({
             "type": "error",
             "task_id": task_id,

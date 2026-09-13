@@ -18,8 +18,13 @@ class DuplicateDetector:
         """
         hashes = []
         for idx, t, frame in scene_representative_frames:
-            h = compute_dhash(frame)
-            hashes.append((idx, t, h))
+            try:
+                if frame is None or frame.size == 0:
+                    continue
+                h = compute_dhash(frame)
+                hashes.append((idx, t, h))
+            except Exception:
+                continue
 
         duplicates: Dict[int, Dict[str, Any]] = {}
         for i in range(len(hashes)):

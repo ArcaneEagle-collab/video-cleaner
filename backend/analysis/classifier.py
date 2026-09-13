@@ -152,25 +152,44 @@ class VideoAnalysisPipeline:
             representative_frames.append((idx, rep_time, rep_gray))
 
             # Detector 1: Static Image
-            static_res = self.static_detector.analyze_frames(frames) if self.detect_static else {"confidence": 0.0, "is_static": False}
+            static_res = {"confidence": 0.0, "is_static": False}
+            if self.detect_static:
+                try:
+                    static_res = self.static_detector.analyze_frames(frames)
+                except Exception as e:
+                    static_res = {"confidence": 0.0, "is_static": False, "error": str(e)}
 
             # Detector 2: Zoom / Pan / Ken Burns (fine-pair precision tracking)
+            zoom_res = {"detected": False, "confidence": 0.0, "type": "NONE", "residual_error": 5.0, "scale_change": 1.0}
             if self.detect_zoom_pan:
-                zoom_res = self.zoom_detector.analyze_fine_pairs(fine_pairs) if fine_pairs else self.zoom_detector.analyze_frames(frames)
-            else:
-                zoom_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
+                try:
+                    zoom_res = self.zoom_detector.analyze_fine_pairs(fine_pairs) if fine_pairs else self.zoom_detector.analyze_frames(frames)
+                except Exception as e:
+                    zoom_res = {"detected": False, "confidence": 0.0, "type": "NONE", "residual_error": 5.0, "scale_change": 1.0, "error": str(e)}
 
             # Detector 3: Transitions
-            trans_res = self.transition_detector.analyze_frames(frames, s_duration) if self.detect_transitions else {"detected": False, "confidence": 0.0, "type": "NONE"}
+            trans_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
+            if self.detect_transitions:
+                try:
+                    trans_res = self.transition_detector.analyze_frames(frames, s_duration)
+                except Exception as e:
+                    trans_res = {"detected": False, "confidence": 0.0, "type": "NONE", "error": str(e)}
 
             # Detector 4: Image With Background (cutouts, photo cards, top photo + bottom banner, blurred wings)
+            bg_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
             if self.detect_background:
-                bg_res = self.bg_detector.analyze_fine_pairs(fine_pairs) if fine_pairs else self.bg_detector.analyze_frames(frames)
-            else:
-                bg_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
+                try:
+                    bg_res = self.bg_detector.analyze_fine_pairs(fine_pairs) if fine_pairs else self.bg_detector.analyze_frames(frames)
+                except Exception as e:
+                    bg_res = {"detected": False, "confidence": 0.0, "type": "NONE", "error": str(e)}
 
             # Detector 5: Motion Analysis
-            motion_res = self.motion_detector.analyze_frames(frames) if self.detect_motion else {"motion_score": 1.0, "is_organic_motion": True, "local_motion_score": 0.5}
+            motion_res = {"motion_score": 1.0, "is_organic_motion": True, "local_motion_score": 0.5}
+            if self.detect_motion:
+                try:
+                    motion_res = self.motion_detector.analyze_frames(frames)
+                except Exception as e:
+                    motion_res = {"motion_score": 1.0, "is_organic_motion": True, "local_motion_score": 0.5, "error": str(e)}
 
             scene_results.append({
                 "scene_index": idx,
