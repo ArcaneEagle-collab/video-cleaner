@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("electronAPI", {
   getApiPort: () => ipcRenderer.invoke("get-api-port"),
   openDirectory: (dirPath) => ipcRenderer.invoke("open-directory", dirPath),
+  openFile: (filePath) => ipcRenderer.invoke("open-file", filePath),
+  showItemInFolder: (filePath) => ipcRenderer.invoke("show-item-in-folder", filePath),
+  getDefaultDownloadsDir: () => ipcRenderer.invoke("get-default-downloads-dir"),
   openLogsFolder: () => ipcRenderer.invoke("open-logs-folder"),
   selectDirectory: () => ipcRenderer.invoke("select-directory"),
   checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),

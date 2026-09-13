@@ -72,6 +72,7 @@ class ExportRequest(BaseModel):
     include_audio: bool = True
     codec: str = "libx264"
     padding_sec: float = 0.2
+    output_dir: Optional[str] = None
 
 # In-memory store for active / completed analysis results
 analysis_store: Dict[str, Any] = {}
@@ -120,15 +121,21 @@ async def stream_video(filename: str):
     """
     Video streaming endpoint supporting Range headers for smooth browser seeking.
     """
-    # Check uploads, outputs, and test_assets
+    # Check uploads, outputs, test_assets, and user Downloads
+    current_out = get_outputs_dir()
+    downloads_dir = Path.home() / "Downloads"
     search_paths = [
-        UPLOAD_DIR / filename,
+        get_upload_dir() / filename,
         TEST_ASSETS_DIR / filename,
-        OUTPUTS_DIR / filename
+        current_out / filename,
+        downloads_dir / filename,
+        Path("outputs") / filename,
     ]
-    # Check recursively in outputs subdirectories
-    for p in OUTPUTS_DIR.glob(f"**/{filename}"):
-        search_paths.append(p)
+    # Check recursively in outputs and downloads subdirectories
+    for base in [current_out, downloads_dir, Path("outputs")]:
+        if base.exists():
+            for p in base.glob(f"**/{filename}"):
+                search_paths.append(p)
 
     target_file: Optional[Path] = None
     for p in search_paths:
@@ -259,13 +266,26 @@ async def get_task_status(task_id: str):
 async def export_video(req: ExportRequest):
     """
     Trims and exports kept video clips and merged master video.
+    Supports custom or default Downloads output directory and broadcasts live progress.
     """
     if not Path(req.video_path).exists():
         raise HTTPException(status_code=404, detail="Video file does not exist")
 
-    exporter = VideoExporter(output_root=str(get_outputs_dir()))
+    output_root = req.output_dir.strip() if (req.output_dir and req.output_dir.strip()) else str(get_outputs_dir())
+    exporter = VideoExporter(output_root=output_root)
+
+    loop = asyncio.get_running_loop()
+
+    def progress_callback(data: Dict[str, Any]):
+        msg = {
+            "type": "export_progress",
+            **data
+        }
+        asyncio.run_coroutine_threadsafe(ws_manager.broadcast(msg), loop)
+
     try:
-        export_result = exporter.export(
+        export_result = await asyncio.to_thread(
+            exporter.export,
             video_path=req.video_path,
             segments=req.segments,
             export_settings={
@@ -275,7 +295,8 @@ async def export_video(req: ExportRequest):
                 "include_audio": req.include_audio,
                 "codec": req.codec,
                 "padding_sec": req.padding_sec
-            }
+            },
+            progress_callback=progress_callback
         )
         return export_result
     except Exception as e:

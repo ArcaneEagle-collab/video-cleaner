@@ -3,7 +3,7 @@ import json
 import shutil
 import cv2
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional, Callable
 from .ffmpeg import cut_clip, merge_clips
 from .ffprobe import probe_video
 
@@ -68,7 +68,8 @@ class VideoExporter:
         self,
         video_path: str,
         segments: List[Dict[str, Any]],
-        export_settings: Dict[str, Any]
+        export_settings: Dict[str, Any],
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
     ) -> Dict[str, Any]:
         """
         Executes export according to user settings and manual overrides.
@@ -77,7 +78,7 @@ class VideoExporter:
         total_duration = meta.get("duration", 0.0)
         source_name = Path(video_path).stem
 
-        # Create project output folder: outputs/{source_name}_clean/
+        # Create project output folder: outputs/{source_name}_export/
         project_dir = self.output_root / f"{source_name}_export"
         project_dir.mkdir(parents=True, exist_ok=True)
 
@@ -154,6 +155,15 @@ class VideoExporter:
                 "combined_video": None
             }
 
+        total_clips = len(merged_intervals)
+        if progress_callback:
+            progress_callback({
+                "stage": f"Starting export of {total_clips} clips...",
+                "percent": 5,
+                "current_clip": 0,
+                "total_clips": total_clips
+            })
+
         # Save project analysis state to analysis.json
         state_file = project_dir / "analysis.json"
         with open(state_file, "w", encoding="utf-8") as f:
@@ -170,6 +180,15 @@ class VideoExporter:
 
         # Extract individual clips
         for idx, (c_start, c_end) in enumerate(merged_intervals, 1):
+            if progress_callback:
+                pct = int(5 + ((idx - 1) / max(1, total_clips)) * 80)
+                progress_callback({
+                    "stage": f"Extracting clip {idx} of {total_clips}...",
+                    "percent": pct,
+                    "current_clip": idx,
+                    "total_clips": total_clips
+                })
+
             # Cleanly trim any intro solid black frames from clip start
             c_start = trim_blank_lead_in(video_path, c_start, c_end)
             if c_end - c_start < 0.2:
@@ -186,7 +205,8 @@ class VideoExporter:
                 reencode=reencode,
                 codec=codec,
                 crf=crf,
-                include_audio=include_audio
+                include_audio=include_audio,
+                preset="veryfast"
             )
 
             clip_paths.append(str(clip_out))
@@ -202,7 +222,15 @@ class VideoExporter:
             })
 
         combined_video_info = None
-        if export_combined:
+        if export_combined and clip_paths:
+            if progress_callback:
+                progress_callback({
+                    "stage": f"Merging {len(clip_paths)} clips into clean master video...",
+                    "percent": 88,
+                    "current_clip": total_clips,
+                    "total_clips": total_clips
+                })
+
             clean_name = f"{source_name}_clean.mp4"
             clean_out = project_dir / clean_name
 
@@ -213,15 +241,24 @@ class VideoExporter:
                 merge_clips(clip_paths, str(clean_out), reencode=False)
 
             if clean_out.exists():
+                # Also save a copy directly in self.output_root if user chose a specific folder like Downloads
+                target_combined_path = clean_out
+                try:
+                    if self.output_root.resolve() != project_dir.resolve():
+                        root_clean_out = self.output_root / clean_name
+                        shutil.copyfile(clean_out, root_clean_out)
+                        target_combined_path = root_clean_out
+                except Exception:
+                    pass
+
                 combined_video_info = {
-                    "filename": clean_name,
-                    "filepath": str(clean_out.resolve()),
+                    "filename": target_combined_path.name,
+                    "filepath": str(target_combined_path.resolve()),
                     "relative_path": f"outputs/{project_dir.name}/{clean_name}",
-                    "size_mb": round(clean_out.stat().st_size / (1024 * 1024), 2)
+                    "size_mb": round(target_combined_path.stat().st_size / (1024 * 1024), 2)
                 }
 
         # If individual clips were not explicitly requested, clean them up or keep them
-        # Per requirement: "Export individual clips" and "Export combined video" toggles
         if not export_individual and combined_video_info:
             for p in clip_paths:
                 try:
@@ -230,8 +267,17 @@ class VideoExporter:
                     pass
             individual_clips = []
 
+        if progress_callback:
+            progress_callback({
+                "stage": "Export completed successfully!",
+                "percent": 100,
+                "current_clip": total_clips,
+                "total_clips": total_clips
+            })
+
         return {
             "status": "success",
+            "output_dir": str(self.output_root.resolve()),
             "project_dir": str(project_dir.resolve()),
             "combined_video": combined_video_info,
             "individual_clips": individual_clips,

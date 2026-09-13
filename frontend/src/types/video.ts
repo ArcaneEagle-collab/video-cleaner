@@ -72,6 +72,7 @@ export interface ExportSettings {
   include_audio: boolean;
   codec: string;
   padding_sec: number;
+  output_dir?: string;
 }
 
 export interface ProgressData {
@@ -84,16 +85,24 @@ export interface ProgressData {
   likely_usable: number;
 }
 
+export interface ExportProgressData {
+  stage: string;
+  percent: number;
+  current_clip?: number;
+  total_clips?: number;
+}
+
 export interface ExportResult {
   status: string;
-  project_dir: string;
+  output_dir?: string;
+  project_dir?: string;
   combined_video?: {
     filename: string;
     filepath: string;
     relative_path: string;
     size_mb: number;
   };
-  individual_clips: Array<{
+  individual_clips?: Array<{
     clip_index: number;
     filename: string;
     filepath: string;
@@ -104,7 +113,7 @@ export interface ExportResult {
     size_mb: number;
   }>;
   analysis_json?: string;
-  surviving_clips_count: number;
+  surviving_clips_count?: number;
   message?: string;
 }
 

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, session } = require("electron");
 const path = require("path");
 const net = require("net");
 const http = require("http");
@@ -102,9 +102,12 @@ async function startBackendProcess(port) {
 
   logToFile(`Resolving backend: exePath="${exePath}", ffmpegDir="${ffmpegDir}"`);
 
-  // Fallback to python server_entry.py if server.exe not built yet in dev
-  if (!fs.existsSync(exePath)) {
-    const devEntry = path.resolve(__dirname, "..", "backend", "server_entry.py");
+  // In development, prefer live python backend code so changes reflect immediately
+  const devEntry = path.resolve(__dirname, "..", "backend", "server_entry.py");
+  if (!isPackaged && fs.existsSync(devEntry)) {
+    exePath = "python";
+    args = [devEntry, ...args];
+  } else if (!fs.existsSync(exePath)) {
     if (fs.existsSync(devEntry)) {
       exePath = "python";
       args = [devEntry, ...args];
@@ -439,6 +442,30 @@ ipcMain.handle("open-dashboard", async () => {
   shell.openExternal(`http://127.0.0.1:${activePort}/dashboard`);
 });
 
+ipcMain.handle("open-file", async (_event, filePath) => {
+  if (filePath && fs.existsSync(filePath)) {
+    shell.openPath(filePath);
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle("show-item-in-folder", async (_event, filePath) => {
+  if (filePath && fs.existsSync(filePath)) {
+    shell.showItemInFolder(filePath);
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle("get-default-downloads-dir", async () => {
+  try {
+    return app.getPath("downloads");
+  } catch {
+    return path.join(process.env.USERPROFILE || process.env.HOME || "", "Downloads");
+  }
+});
+
 ipcMain.handle("select-directory", async () => {
   if (!mainWindow) return null;
   const res = await dialog.showOpenDialog(mainWindow, {
@@ -461,6 +488,16 @@ ipcMain.handle("check-for-updates", async () => {
 
 // App Lifecycle
 app.whenReady().then(async () => {
+  // Handle downloads automatically to Downloads folder without blocking
+  try {
+    session.defaultSession.on("will-download", (_event, item) => {
+      const downloadsDir = app.getPath("downloads");
+      const defaultName = item.getFilename();
+      const savePath = path.join(downloadsDir, defaultName);
+      item.setSavePath(savePath);
+    });
+  } catch {}
+
   createMainWindow();
 
   try {

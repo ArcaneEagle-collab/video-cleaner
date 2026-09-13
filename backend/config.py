@@ -44,14 +44,12 @@ def get_default_outputs_dir() -> Path:
     override = os.environ.get("VIDEO_CLEANER_OUTPUTS_DIR")
     if override:
         p = Path(override)
-    elif os.name == "nt":
-        videos_folder = Path.home() / "Videos"
-        if videos_folder.exists():
-            p = videos_folder / APP_NAME
-        else:
-            p = Path.home() / APP_NAME / "Outputs"
     else:
-        p = Path.home() / "Videos" / APP_NAME
+        downloads_folder = Path.home() / "Downloads"
+        if downloads_folder.exists():
+            p = downloads_folder
+        else:
+            p = Path.home() / "Downloads"
     p.mkdir(parents=True, exist_ok=True)
     return p
 

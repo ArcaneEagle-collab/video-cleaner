@@ -147,11 +147,12 @@ def cut_clip(
     reencode: bool = True,
     codec: str = "libx264",
     crf: int = 18,
-    include_audio: bool = True
+    include_audio: bool = True,
+    preset: str = "veryfast"
 ) -> bool:
     """
     Extract a video sub-clip using FFmpeg with guaranteed frame accuracy.
-    Uses re-encoding with fast preset and high fidelity (CRF) to prevent
+    Uses re-encoding with fast/veryfast preset and high fidelity (CRF) to prevent
     keyframe snapping or audio desync at arbitrary cut boundaries.
     """
     ffmpeg_cmd = get_ffmpeg_path()
@@ -171,7 +172,7 @@ def cut_clip(
         "-t", duration_str,
         "-c:v", codec,
         "-crf", str(crf),
-        "-preset", "fast",
+        "-preset", preset,
         "-pix_fmt", "yuv420p",
         "-avoid_negative_ts", "make_zero",
         *audio_flags,

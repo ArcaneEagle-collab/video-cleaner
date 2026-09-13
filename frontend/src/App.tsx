@@ -21,6 +21,7 @@ import {
   ExportSettings,
   ProgressData,
   ExportResult,
+  ExportProgressData,
 } from "./types/video";
 import { Download, Sliders, ArrowLeft, CheckCircle2, RotateCcw, Sparkles } from "lucide-react";
 
@@ -73,6 +74,7 @@ export function App() {
   // Export Modal State
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<ExportProgressData | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
 
   // Batch Items
@@ -114,11 +116,16 @@ export function App() {
     trackEvent("processing_cancelled");
   }, []);
 
+  const handleExportProgress = useCallback((data: ExportProgressData) => {
+    setExportProgress(data);
+  }, []);
+
   const { isConnected } = useWebSocket(
     handleProgress,
     handleCompleted,
     handleError,
-    handleCancelled
+    handleCancelled,
+    handleExportProgress
   );
 
   // Trigger Analysis
@@ -247,6 +254,10 @@ export function App() {
     if (!metadata) return;
     setIsExporting(true);
     setExportResult(null);
+    setExportProgress({
+      stage: "Starting clip extraction...",
+      percent: 5,
+    });
 
     try {
       const res = await fetch(getApiEndpoint("/api/export"), {
@@ -261,19 +272,29 @@ export function App() {
           include_audio: exportSettings.include_audio,
           codec: exportSettings.codec,
           padding_sec: exportSettings.padding_sec,
+          output_dir: exportSettings.output_dir,
         }),
       });
       const data = await res.json();
-      setExportResult(data);
-      if (exportSettings.export_combined) {
-        trackEvent("clean_video_exported");
+      if (!res.ok) {
+        throw new Error(data.detail || data.message || `Export failed with HTTP status ${res.status}`);
       }
-      if (exportSettings.export_individual) {
-        trackEvent("clip_exported", { clips_count: keptClipsCount });
+      setExportResult(data);
+      if (data.status === "success") {
+        setExportProgress({ stage: "Export completed successfully!", percent: 100 });
+        if (exportSettings.export_combined) {
+          trackEvent("clean_video_exported");
+        }
+        if (exportSettings.export_individual) {
+          trackEvent("clip_exported", { clips_count: keptClipsCount });
+        }
       }
     } catch (err: any) {
       trackEvent("export_error", { error_type: "export_failed" });
-      alert(`Export failed: ${err.message}`);
+      setExportResult({
+        status: "error",
+        message: err.message || "Failed to export video footage",
+      });
     } finally {
       setIsExporting(false);
     }
@@ -435,17 +456,32 @@ export function App() {
                     <CheckCircle2 size={14} /> {keptClipsCount} Usable Clips Preserved
                   </span>
 
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    style={{ padding: "10px 22px", fontSize: "14px" }}
-                    onClick={() => {
-                      setExportResult(null);
-                      setIsExportModalOpen(true);
-                    }}
-                  >
-                    <Download size={16} /> Export Surviving Footage
-                  </button>
+                  {exportResult && exportResult.status === "success" ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        padding: "10px 20px",
+                        fontSize: "14px",
+                        background: "rgba(16, 185, 129, 0.2)",
+                        color: "#10B981",
+                        border: "1px solid rgba(16, 185, 129, 0.4)",
+                        fontWeight: "700",
+                      }}
+                      onClick={() => setIsExportModalOpen(true)}
+                    >
+                      <CheckCircle2 size={16} /> Video Exported (View Results)
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      style={{ padding: "10px 22px", fontSize: "14px" }}
+                      onClick={() => setIsExportModalOpen(true)}
+                    >
+                      <Download size={16} /> Export Surviving Footage
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -510,7 +546,9 @@ export function App() {
         setExportSettings={setExportSettings}
         onExport={handleExport}
         isExporting={isExporting}
+        exportProgress={exportProgress}
         exportResult={exportResult}
+        setExportResult={setExportResult}
         keptClipsCount={keptClipsCount}
       />
 

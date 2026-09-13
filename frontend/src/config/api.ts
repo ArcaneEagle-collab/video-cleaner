@@ -10,6 +10,9 @@ declare global {
       getApiPort?: () => Promise<number>;
       openLogsFolder?: () => Promise<void>;
       openDirectory?: (path: string) => Promise<void>;
+      openFile?: (path: string) => Promise<boolean>;
+      showItemInFolder?: (path: string) => Promise<boolean>;
+      getDefaultDownloadsDir?: () => Promise<string>;
       selectDirectory?: () => Promise<string | null>;
       checkForUpdates?: () => Promise<{ hasUpdate: boolean; currentVersion: string; latestVersion?: string; message: string }>;
       openDashboard?: () => Promise<void>;

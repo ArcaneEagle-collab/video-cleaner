@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { ProgressData } from "../types/video";
+import { ProgressData, ExportProgressData } from "../types/video";
 import { getWsBaseUrl } from "../config/api";
 
 interface WebSocketMessage {
-  type: "progress" | "completed" | "cancelled" | "error";
-  task_id: string;
+  type: "progress" | "completed" | "cancelled" | "error" | "export_progress";
+  task_id?: string;
   stage?: string;
   percent?: number;
   timestamp?: number;
@@ -12,6 +12,8 @@ interface WebSocketMessage {
   scenes_detected?: number;
   likely_images?: number;
   likely_usable?: number;
+  current_clip?: number;
+  total_clips?: number;
   result?: any;
   error?: string;
   message?: string;
@@ -21,7 +23,8 @@ export function useWebSocket(
   onProgress?: (data: ProgressData) => void,
   onCompleted?: (result: any) => void,
   onError?: (err: string) => void,
-  onCancelled?: () => void
+  onCancelled?: () => void,
+  onExportProgress?: (data: ExportProgressData) => void
 ) {
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -52,6 +55,13 @@ export function useWebSocket(
               scenes_detected: msg.scenes_detected ?? 0,
               likely_images: msg.likely_images ?? 0,
               likely_usable: msg.likely_usable ?? 0
+            });
+          } else if (msg.type === "export_progress") {
+            onExportProgress?.({
+              stage: msg.stage || "Exporting video...",
+              percent: msg.percent ?? 0,
+              current_clip: msg.current_clip,
+              total_clips: msg.total_clips
             });
           } else if (msg.type === "completed") {
             onCompleted?.(msg.result);
