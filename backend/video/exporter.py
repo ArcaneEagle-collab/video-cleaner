@@ -7,35 +7,48 @@ from typing import List, Dict, Any, Tuple, Optional, Callable
 from .ffmpeg import cut_clip, merge_clips
 from .ffprobe import probe_video
 
-def trim_blank_lead_in(video_path: str, start_sec: float, end_sec: float, max_trim_sec: float = 0.5) -> float:
+def trim_blank_lead_in(
+    video_path: str,
+    start_sec: float,
+    end_sec: float,
+    max_trim_sec: float = 0.5,
+    cap: Optional[cv2.VideoCapture] = None
+) -> float:
     """
     Checks if the clip begins with solid black/blank frames (e.g. intro black screen)
     and advances start_sec past them to the first visible frame.
+    Optionally reuses an open cv2.VideoCapture for fast batch processing.
     """
+    local_cap = None
     try:
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        active_cap = cap
+        if active_cap is None or not active_cap.isOpened():
+            local_cap = cv2.VideoCapture(video_path)
+            active_cap = local_cap
+
+        fps = active_cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0:
-            cap.release()
             return start_sec
             
         start_frame = int(start_sec * fps)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        active_cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         
         curr_frame = start_frame
         max_frame = min(int(end_sec * fps) - 5, start_frame + int(max_trim_sec * fps))
         
         while curr_frame < max_frame:
-            ret, frame = cap.read()
+            ret, frame = active_cap.read()
             if not ret or frame.mean() > 4.0:
                 break
             curr_frame += 1
             
-        cap.release()
         if curr_frame > start_frame:
             return round(curr_frame / fps, 3)
     except Exception:
         pass
+    finally:
+        if local_cap is not None and local_cap.isOpened():
+            local_cap.release()
     return start_sec
 
 def merge_contiguous_intervals(intervals: List[Tuple[float, float]], gap_threshold: float = 0.1) -> List[Tuple[float, float]]:
@@ -73,6 +86,7 @@ class VideoExporter:
     ) -> Dict[str, Any]:
         """
         Executes export according to user settings and manual overrides.
+        Guarantees that every surviving clip marked KEEP is exported and merged.
         """
         meta = probe_video(video_path)
         total_duration = meta.get("duration", 0.0)
@@ -101,7 +115,7 @@ class VideoExporter:
 
         # Sort segments chronologically
         sorted_segs = sorted(segments, key=lambda s: float(s.get("start", 0.0)))
-        keep_intervals: List[Tuple[float, float]] = []
+        keep_clips: List[Dict[str, Any]] = []
 
         for idx, seg in enumerate(sorted_segs):
             effective_action = seg.get("user_override") or seg.get("action")
@@ -110,6 +124,7 @@ class VideoExporter:
 
             orig_start = float(seg["start"])
             orig_end = float(seg["end"])
+            dur = orig_end - orig_start
 
             # Check if adjacent to discarded (non-KEEP) segments or video extremities
             prev_action = (sorted_segs[idx - 1].get("user_override") or sorted_segs[idx - 1].get("action")) if idx > 0 else None
@@ -118,10 +133,15 @@ class VideoExporter:
             prev_is_discarded = (prev_action != "KEEP")
             next_is_discarded = (next_action != "KEEP")
 
+            # Max safety inset for short clips: ensure the clip is never wiped out
+            max_inset = max(0.0, (dur - 0.1) / 2.0)
+            eff_start_inset = min(safety_inset, max_inset) if prev_is_discarded else 0.0
+            eff_end_inset = min(safety_inset, max_inset) if next_is_discarded else 0.0
+
             # Calculate safe start boundary
             if prev_is_discarded:
                 # Bordering a removed image/transition: apply safety inset inward into valid video; NEVER pad backwards
-                start_p = orig_start + safety_inset
+                start_p = orig_start + eff_start_inset
             else:
                 # Safe boundary with another KEEP clip: allow user padding up to preceding boundary
                 start_p = max(0.0, orig_start - padding)
@@ -131,7 +151,7 @@ class VideoExporter:
             # Calculate safe end boundary
             if next_is_discarded:
                 # Bordering a removed image/transition: apply safety inset inward into valid video; NEVER pad forwards
-                end_p = orig_end - safety_inset
+                end_p = orig_end - eff_end_inset
             else:
                 # Safe boundary with another KEEP clip: allow user padding up to succeeding boundary
                 end_p = orig_end + padding
@@ -140,13 +160,23 @@ class VideoExporter:
                 if idx < len(sorted_segs) - 1:
                     end_p = min(end_p, float(sorted_segs[idx + 1]["start"]))
 
-            if end_p - start_p >= 0.2:
-                keep_intervals.append((round(start_p, 3), round(end_p, 3)))
+            # Ensure minimum viable duration of at least 0.08s and end_p > start_p
+            if end_p - start_p < 0.08:
+                if dur >= 0.08:
+                    start_p = orig_start
+                    end_p = orig_end
+                else:
+                    end_p = max(start_p + 0.08, end_p)
 
-        # Merge contiguous KEEP intervals (gap <= 0.15s)
-        merged_intervals = merge_contiguous_intervals(keep_intervals, gap_threshold=0.15)
+            keep_clips.append({
+                "segment": seg,
+                "start": round(start_p, 3),
+                "end": round(end_p, 3),
+                "orig_start": orig_start,
+                "orig_end": orig_end
+            })
 
-        if not merged_intervals:
+        if not keep_clips:
             return {
                 "status": "error",
                 "message": "No KEEP segments selected for export. Please mark at least one segment to KEEP.",
@@ -154,7 +184,7 @@ class VideoExporter:
                 "combined_video": None
             }
 
-        total_clips = len(merged_intervals)
+        total_clips = len(keep_clips)
         if progress_callback:
             progress_callback({
                 "stage": f"Starting export of {total_clips} clips...",
@@ -171,54 +201,70 @@ class VideoExporter:
                 "video_metadata": meta,
                 "segments": segments,
                 "export_settings": export_settings,
-                "merged_intervals": merged_intervals
+                "merged_intervals": [[c["start"], c["end"]] for c in keep_clips]
             }, f, indent=2)
 
         individual_clips = []
         clip_paths = []
 
-        # Extract individual clips
-        for idx, (c_start, c_end) in enumerate(merged_intervals, 1):
-            if progress_callback:
-                pct = int(5 + ((idx - 1) / max(1, total_clips)) * 80)
-                progress_callback({
-                    "stage": f"Extracting clip {idx} of {total_clips}...",
-                    "percent": pct,
-                    "current_clip": idx,
-                    "total_clips": total_clips
+        # Open video capture once for fast blank lead-in detection
+        cap = None
+        try:
+            cap = cv2.VideoCapture(video_path)
+        except Exception:
+            cap = None
+
+        try:
+            # Extract individual clips
+            for idx, clip_info in enumerate(keep_clips, 1):
+                c_start = clip_info["start"]
+                c_end = clip_info["end"]
+
+                if progress_callback:
+                    pct = int(5 + ((idx - 1) / max(1, total_clips)) * 80)
+                    progress_callback({
+                        "stage": f"Extracting clip {idx} of {total_clips}...",
+                        "percent": pct,
+                        "current_clip": idx,
+                        "total_clips": total_clips
+                    })
+
+                # Cleanly trim any intro solid black frames from clip start
+                if clip_info["orig_start"] < 0.5 or (c_start - clip_info["orig_start"] > 0.05):
+                    trimmed_start = trim_blank_lead_in(video_path, c_start, c_end, cap=cap)
+                    if c_end - trimmed_start >= 0.08:
+                        c_start = trimmed_start
+
+                clip_name = f"{source_name}_clip_{idx:03d}.mp4"
+                clip_out = project_dir / clip_name
+                
+                cut_clip(
+                    input_path=video_path,
+                    output_path=str(clip_out),
+                    start_sec=c_start,
+                    end_sec=c_end,
+                    reencode=reencode,
+                    codec=codec,
+                    crf=crf,
+                    include_audio=include_audio,
+                    preset="veryfast"
+                )
+
+                clip_paths.append(str(clip_out))
+                individual_clips.append({
+                    "clip_index": idx,
+                    "segment_id": clip_info["segment"].get("id", f"seg_{idx:03d}"),
+                    "filename": clip_name,
+                    "filepath": str(clip_out.resolve()),
+                    "relative_path": f"outputs/{project_dir.name}/{clip_name}",
+                    "start": round(c_start, 3),
+                    "end": round(c_end, 3),
+                    "duration": round(c_end - c_start, 3),
+                    "size_mb": round(clip_out.stat().st_size / (1024 * 1024), 2)
                 })
-
-            # Cleanly trim any intro solid black frames from clip start
-            c_start = trim_blank_lead_in(video_path, c_start, c_end)
-            if c_end - c_start < 0.2:
-                continue
-
-            clip_name = f"{source_name}_clip_{idx:03d}.mp4"
-            clip_out = project_dir / clip_name
-            
-            cut_clip(
-                input_path=video_path,
-                output_path=str(clip_out),
-                start_sec=c_start,
-                end_sec=c_end,
-                reencode=reencode,
-                codec=codec,
-                crf=crf,
-                include_audio=include_audio,
-                preset="veryfast"
-            )
-
-            clip_paths.append(str(clip_out))
-            individual_clips.append({
-                "clip_index": idx,
-                "filename": clip_name,
-                "filepath": str(clip_out.resolve()),
-                "relative_path": f"outputs/{project_dir.name}/{clip_name}",
-                "start": round(c_start, 3),
-                "end": round(c_end, 3),
-                "duration": round(c_end - c_start, 3),
-                "size_mb": round(clip_out.stat().st_size / (1024 * 1024), 2)
-            })
+        finally:
+            if cap is not None and cap.isOpened():
+                cap.release()
 
         combined_video_info = None
         if export_combined and clip_paths:
@@ -288,5 +334,5 @@ class VideoExporter:
             "combined_video": combined_video_info,
             "individual_clips": individual_clips,
             "analysis_json": str(state_file.resolve()),
-            "surviving_clips_count": len(merged_intervals)
+            "surviving_clips_count": len(keep_clips)
         }

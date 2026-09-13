@@ -83,7 +83,7 @@ print("\nTriggering export through bundled FFmpeg...")
 exp_req = urllib.request.Request(f"{base_url}/api/export", data=export_payload, headers={"Content-Type": "application/json"})
 exp_res = json.loads(urllib.request.urlopen(exp_req).read().decode())
 print("Export Result Status:", exp_res.get("status"))
-print("Surviving Clips:", exp_res.get("surviving_clips"))
+print("Surviving Clips:", exp_res.get("surviving_clips_count"))
 print("Combined Master Video:", exp_res.get("combined_video"))
 
 # 4. Clean Shutdown

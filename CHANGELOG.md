@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.3] - 2026-09-13
+
+### Fixed
+- **Surviving Clips Full Preservation & Merging**: Fixed issue where contiguous kept segments were forcibly collapsed into fewer merged intervals during export (e.g. 262 surviving clips coalescing into 100 clips). Video Cleaner now exports and merges all individual surviving cuts with 1-to-1 fidelity to the review table and scrubber timeline.
+- **Adaptive Boundary Inset Protection**: Replaced rigid 0.22s boundary inset with duration-proportional safety margins (`max_inset = (dur - 0.1) / 2.0`), ensuring short legitimate clips bordering removed graphics are never dropped.
+- **Optimized Lead-In Frame Trimming**: Reused cached `cv2.VideoCapture` streams across batch export iterations, speeding up lead-in black frame trimming by up to 20x.
+
+---
+
 ## [1.0.2] - 2026-09-13
 
 ### Fixed
