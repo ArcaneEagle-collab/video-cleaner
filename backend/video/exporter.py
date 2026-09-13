@@ -95,9 +95,9 @@ class VideoExporter:
         crf = crf_map.get(quality, 18)
         reencode = True  # Always frame-accurate re-encode to prevent keyframe snapping
 
-        # Safety inset (~2 frames at 24-30fps) to eliminate any transition dissolve / flash ghosting
-        # when bordering a segment marked for REMOVE
-        safety_inset = 0.08
+        # Safety inset (~5-6 frames at 24-30fps) to eliminate any transition dissolve / blur / flash ghosting
+        # when bordering a segment not marked for KEEP
+        safety_inset = 0.22
 
         # Sort segments chronologically
         sorted_segs = sorted(segments, key=lambda s: float(s.get("start", 0.0)))
@@ -111,30 +111,29 @@ class VideoExporter:
             orig_start = float(seg["start"])
             orig_end = float(seg["end"])
 
-            # Check if adjacent to REMOVE segments
-            prev_is_remove = (idx > 0) and (
-                (sorted_segs[idx - 1].get("user_override") or sorted_segs[idx - 1].get("action")) == "REMOVE"
-            )
-            next_is_remove = (idx < len(sorted_segs) - 1) and (
-                (sorted_segs[idx + 1].get("user_override") or sorted_segs[idx + 1].get("action")) == "REMOVE"
-            )
+            # Check if adjacent to discarded (non-KEEP) segments or video extremities
+            prev_action = (sorted_segs[idx - 1].get("user_override") or sorted_segs[idx - 1].get("action")) if idx > 0 else None
+            next_action = (sorted_segs[idx + 1].get("user_override") or sorted_segs[idx + 1].get("action")) if (idx < len(sorted_segs) - 1) else None
+
+            prev_is_discarded = (prev_action != "KEEP")
+            next_is_discarded = (next_action != "KEEP")
 
             # Calculate safe start boundary
-            if prev_is_remove:
-                # Bordering a removed image: apply safety inset inward into valid video; NEVER pad backwards
+            if prev_is_discarded:
+                # Bordering a removed image/transition: apply safety inset inward into valid video; NEVER pad backwards
                 start_p = orig_start + safety_inset
             else:
-                # Safe boundary: allow user padding up to preceding boundary
+                # Safe boundary with another KEEP clip: allow user padding up to preceding boundary
                 start_p = max(0.0, orig_start - padding)
                 if idx > 0:
                     start_p = max(start_p, float(sorted_segs[idx - 1]["end"]))
 
             # Calculate safe end boundary
-            if next_is_remove:
-                # Bordering a removed image: apply safety inset inward into valid video; NEVER pad forwards
+            if next_is_discarded:
+                # Bordering a removed image/transition: apply safety inset inward into valid video; NEVER pad forwards
                 end_p = orig_end - safety_inset
             else:
-                # Safe boundary: allow user padding up to succeeding boundary
+                # Safe boundary with another KEEP clip: allow user padding up to succeeding boundary
                 end_p = orig_end + padding
                 if total_duration > 0:
                     end_p = min(total_duration, end_p)
@@ -238,7 +237,14 @@ class VideoExporter:
                 # If only one clip, copy directly
                 shutil.copyfile(clip_paths[0], clean_out)
             else:
-                merge_clips(clip_paths, str(clean_out), reencode=False)
+                merge_clips(
+                    clip_paths,
+                    str(clean_out),
+                    reencode=True,
+                    codec=codec,
+                    crf=crf,
+                    preset="veryfast"
+                )
 
             if clean_out.exists():
                 # Also save a copy directly in self.output_root if user chose a specific folder like Downloads

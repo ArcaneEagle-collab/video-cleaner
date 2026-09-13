@@ -152,32 +152,54 @@ def cut_clip(
 ) -> bool:
     """
     Extract a video sub-clip using FFmpeg with guaranteed frame accuracy.
-    Uses re-encoding with fast/veryfast preset and high fidelity (CRF) to prevent
-    keyframe snapping or audio desync at arbitrary cut boundaries.
+    Uses two-stage seeking (coarse seek before -i for high speed, exact seek after -i
+    for frame accuracy) to eliminate initial keyframe flashes and audio sync drift.
     """
     ffmpeg_cmd = get_ffmpeg_path()
-    start_str = f"{max(0.0, start_sec):.3f}"
-    duration_str = f"{max(0.01, end_sec - start_sec):.3f}"
+    start_sec = max(0.0, start_sec)
+    end_sec = max(start_sec + 0.05, end_sec)
+    duration = end_sec - start_sec
+    duration_str = f"{duration:.3f}"
     
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     audio_flags = ["-c:a", "aac", "-b:a", "192k"] if include_audio else ["-an"]
 
-    # Frame-accurate extraction: seek with -ss before -i for fast decoding to keyframe,
-    # re-encode to target cut point, and reset timestamps with -avoid_negative_ts make_zero
-    cmd = [
-        ffmpeg_cmd, "-y",
-        "-ss", start_str,
-        "-i", str(Path(input_path).resolve()),
-        "-t", duration_str,
-        "-c:v", codec,
-        "-crf", str(crf),
-        "-preset", preset,
-        "-pix_fmt", "yuv420p",
-        "-avoid_negative_ts", "make_zero",
-        *audio_flags,
-        str(Path(output_path).resolve())
-    ]
+    # Two-stage seek: fast jump to keyframe 5s prior, then exact frame seek
+    if start_sec > 5.0:
+        coarse_seek = max(0.0, start_sec - 5.0)
+        fine_seek = start_sec - coarse_seek
+        cmd = [
+            ffmpeg_cmd, "-y",
+            "-accurate_seek",
+            "-ss", f"{coarse_seek:.3f}",
+            "-i", str(Path(input_path).resolve()),
+            "-ss", f"{fine_seek:.3f}",
+            "-t", duration_str,
+            "-c:v", codec,
+            "-crf", str(crf),
+            "-preset", preset,
+            "-pix_fmt", "yuv420p",
+            "-avoid_negative_ts", "make_zero",
+            *audio_flags,
+            str(Path(output_path).resolve())
+        ]
+    else:
+        cmd = [
+            ffmpeg_cmd, "-y",
+            "-accurate_seek",
+            "-ss", f"{start_sec:.3f}",
+            "-i", str(Path(input_path).resolve()),
+            "-t", duration_str,
+            "-c:v", codec,
+            "-crf", str(crf),
+            "-preset", preset,
+            "-pix_fmt", "yuv420p",
+            "-avoid_negative_ts", "make_zero",
+            *audio_flags,
+            str(Path(output_path).resolve())
+        ]
+
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_subprocess_flags())
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg failed to extract clip: {result.stderr}")
@@ -187,11 +209,15 @@ def cut_clip(
 def merge_clips(
     clip_paths: List[str],
     output_path: str,
-    reencode: bool = False
+    reencode: bool = True,
+    codec: str = "libx264",
+    crf: int = 18,
+    preset: str = "veryfast"
 ) -> bool:
     """
     Concatenates multiple video clips into a single video file.
-    Ensures clean timestamp generation and avoids seam glitches.
+    Uses re-encoding concat demuxer by default to guarantee continuous PTS/DTS timestamps,
+    flawless audio-video synchronization, and universal playback compatibility across all players.
     """
     if not clip_paths:
         raise ValueError("No clip paths provided for merging.")
@@ -208,7 +234,7 @@ def merge_clips(
 
     try:
         if not reencode:
-            # Stream copy concat with timestamp re-basing and genpts to eliminate seam flashes
+            # Attempt stream copy concat if explicitly requested
             cmd = [
                 ffmpeg_cmd, "-y",
                 "-f", "concat",
@@ -223,15 +249,15 @@ def merge_clips(
             if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
                 return True
 
-        # Re-encode concat if stream-copy fails or is requested
+        # Frame-accurate, clean re-encode concat demuxer
         cmd = [
             ffmpeg_cmd, "-y",
             "-f", "concat",
             "-safe", "0",
             "-i", concat_file,
-            "-c:v", "libx264",
-            "-crf", "18",
-            "-preset", "fast",
+            "-c:v", codec,
+            "-crf", str(crf),
+            "-preset", preset,
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-b:a", "192k",

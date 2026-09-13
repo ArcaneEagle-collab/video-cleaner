@@ -40,7 +40,7 @@ export function App() {
   // Analysis Settings
   const [settings, setSettings] = useState<AnalysisSettings>({
     sensitivity: "Medium",
-    min_clip_duration: 2.0,
+    min_clip_duration: 1.2,
     min_clip_gap: 0.3,
     detect_static: true,
     detect_zoom_pan: true,

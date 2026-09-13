@@ -179,7 +179,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 {exportProgress?.stage || "Trimming & Merging usable footage..."}
               </h4>
               <p style={{ fontSize: "13px", color: "var(--text-secondary)", maxWidth: "450px" }}>
-                Extracting {keptClipsCount} surviving video clips and assembling master video locally without cloud dependency.
+                Extracting surviving video clips and assembling clean master video with seamless frame-accurate cuts.
               </p>
             </div>
 
@@ -251,7 +251,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               <div>
                 <h4 style={{ fontSize: "15px", fontWeight: "700", color: "#10B981" }}>Export Completed Successfully!</h4>
                 <p style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                  Extracted {exportResult.surviving_clips_count ?? keptClipsCount} usable video clips locally without cloud dependency.
+                  Successfully extracted and merged all {exportResult.surviving_clips_count ?? keptClipsCount} surviving video clips into a clean master video.
                 </p>
               </div>
             </div>
@@ -385,7 +385,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           /* 4. Export Form Options */
           <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
             <div style={{ background: "rgba(212, 175, 55, 0.12)", padding: "12px 16px", borderRadius: "8px", border: "1px solid rgba(212, 175, 55, 0.3)", fontSize: "13px" }}>
-              Ready to export <span style={{ fontWeight: "700", color: "#F3D079" }}>{keptClipsCount} surviving clip sections</span> without editorial image slideshows.
+              Ready to export and merge <span style={{ fontWeight: "700", color: "#F3D079" }}>{keptClipsCount} preserved footage segments</span> into a clean single master video.
             </div>
 
             {/* Destination Folder Selector */}

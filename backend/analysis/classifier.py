@@ -20,7 +20,7 @@ class VideoAnalysisPipeline:
     def __init__(
         self,
         sensitivity: str = "Medium",
-        min_clip_duration: float = 2.0,
+        min_clip_duration: float = 1.2,
         min_clip_gap: float = 0.3,
         detect_static: bool = True,
         detect_zoom_pan: bool = True,
@@ -43,12 +43,15 @@ class VideoAnalysisPipeline:
 
         # Thresholds based on sensitivity
         if sensitivity.lower() == "conservative":
+            self.scene_threshold = 24.0
             self.remove_threshold = 0.85
             self.uncertain_threshold = 0.70
         elif sensitivity.lower() == "aggressive":
+            self.scene_threshold = 17.0
             self.remove_threshold = 0.50
             self.uncertain_threshold = 0.35
         else: # Medium / Balanced
+            self.scene_threshold = 20.0
             self.remove_threshold = 0.65
             self.uncertain_threshold = 0.45
 
@@ -93,21 +96,21 @@ class VideoAnalysisPipeline:
         # Stage 1: Scene Detection
         # ----------------------------------------------------------------------
         report("Scene detection", 10.0, scenes_detected=0, likely_images=0, likely_usable=0)
-        raw_scenes = detect_scenes(video_path, min_scene_len_sec=0.4)
+        raw_scenes = detect_scenes(video_path, min_scene_len_sec=0.35, threshold=self.scene_threshold)
 
         if cancel_check and cancel_check():
             return {"cancelled": True}
 
-        # Subdivide very long scenes (> 10s) into logical chunks for granular analysis
+        # Subdivide long scenes (> 8s) into logical chunks for granular analysis
         subdivided_scenes = []
         for s_start, s_end in raw_scenes:
             dur = s_end - s_start
-            if dur > 12.0:
-                chunk_len = 8.0
+            if dur > 8.0:
+                chunk_len = 4.5
                 curr = s_start
                 while curr < s_end:
                     nxt = min(curr + chunk_len, s_end)
-                    if (s_end - nxt) < 2.0:
+                    if (s_end - nxt) < 1.5:
                         nxt = s_end
                     subdivided_scenes.append((curr, nxt))
                     curr = nxt
@@ -276,7 +279,7 @@ class VideoAnalysisPipeline:
                 action = "REMOVE"
 
             # 6. Real Video vs Ambiguous
-            elif motion.get("is_organic_motion") or motion.get("motion_score", 0) > 0.25:
+            elif (motion.get("is_organic_motion") or motion.get("motion_score", 0) > 0.35) and static.get("confidence", 0) < 0.50 and zoom.get("confidence", 0) < 0.45 and bg.get("confidence", 0) < 0.50:
                 classification = "REAL_VIDEO"
                 confidence = max(0.80, 1.0 - static.get("confidence", 0.0))
                 reason = f"Real video footage with organic motion (score: {motion.get('motion_score', 0):.2f})"

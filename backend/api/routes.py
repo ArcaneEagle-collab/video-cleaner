@@ -53,7 +53,7 @@ class AnalysisRequest(BaseModel):
     video_path: str
     task_id: Optional[str] = None
     sensitivity: str = "Medium"
-    min_clip_duration: float = 2.0
+    min_clip_duration: float = 1.2
     min_clip_gap: float = 0.3
     detect_static: bool = True
     detect_zoom_pan: bool = True
@@ -71,7 +71,7 @@ class ExportRequest(BaseModel):
     quality: str = "High"
     include_audio: bool = True
     codec: str = "libx264"
-    padding_sec: float = 0.2
+    padding_sec: float = 0.0
     output_dir: Optional[str] = None
 
 # In-memory store for active / completed analysis results
