@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.1] - 2026-09-13
+
+### Fixed
+- **Anti-Bleed Boundary Inset**: Increased safety margin to 0.22s (~5–6 frames) on all discarded/removed boundaries, eliminating crossfade, dissolve, blur, and flash glitches at video seams.
+- **Granular Scene Cut Detection**: Lowered PySceneDetect threshold from 27.0 to 20.0 and added 8s subdivision to detect subtle slide transitions and photo inserts inside long takes.
+- **Master Video Concatenation**: Replaced broken stream-copy (`-c copy`) concatenation with compliant re-encoded concat demuxing, eliminating over 4,400 DTS/PTS backward jumps and ensuring all surviving clips merge into a seamless, playable single master video.
+- **Frame-Accurate Seeking**: Implemented two-stage seek in `cut_clip` to eliminate initial keyframe flashes.
+- **Short Clip Preservation**: Adjusted default minimum usable duration from 2.0s to 1.2s so legitimate short camera takes are preserved.
+
+---
+
 ## [1.0.0] - 2026-09-13
 
 ### Initial Public Desktop Production Release
