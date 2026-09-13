@@ -20,7 +20,7 @@ import {
   ProgressData,
   ExportResult,
 } from "./types/video";
-import { Download, Sliders, ArrowLeft, CheckCircle2, RotateCcw } from "lucide-react";
+import { Download, Sliders, ArrowLeft, CheckCircle2, RotateCcw, Sparkles } from "lucide-react";
 
 export function App() {
   const [activeTab, setActiveTab] = useState<"workspace" | "batch" | "projects">("workspace");
@@ -492,6 +492,24 @@ export function App() {
         keptClipsCount={keptClipsCount}
       />
 
+      {/* Permanent Footer */}
+      <footer
+        style={{
+          marginTop: "auto",
+          padding: "20px 24px 10px 24px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          borderTop: "1px solid var(--border-subtle)",
+          color: "var(--text-muted)",
+          fontSize: "12px",
+        }}
+      >
+        <span>Video Cleaner v1.0.0</span>
+        <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "#F3D079", fontWeight: "600", letterSpacing: "0.02em" }}>
+          <Sparkles size={13} color="#D4AF37" /> Made by Amna
+        </span>
+      </footer>
       {/* Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
