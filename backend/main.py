@@ -4,7 +4,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .api.routes import router as api_router
+from .api.routes import router as api_router, dashboard_router
 from .api.websocket import ws_manager
 
 app = FastAPI(
@@ -22,8 +22,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register API Router
+# Register API & Dashboard Routers
 app.include_router(api_router)
+app.include_router(dashboard_router)
 
 # Mount outputs directory for direct download of clips and master videos
 OUTPUTS_DIR = Path("outputs")

@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const path = require("path");
 const net = require("net");
 const http = require("http");
-const { spawn, execSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 
 let mainWindow = null;
@@ -73,17 +73,22 @@ function getApplicationPaths() {
   return { isPackaged, backendExe, ffmpegDir, frontendDir };
 }
 
+function getLogsDirectory() {
+  const appData = process.env.APPDATA || path.join(app.getPath("home"), "AppData", "Roaming");
+  const logDir = path.join(appData, "Video Cleaner", "logs");
+  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+  return logDir;
+}
+
 function logToFile(msg) {
   try {
-    const appData = process.env.APPDATA || path.join(app.getPath("home"), "AppData", "Roaming");
-    const logDir = path.join(appData, "Video Cleaner", "logs");
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    const logDir = getLogsDirectory();
     fs.appendFileSync(path.join(logDir, "electron.log"), `[${new Date().toISOString()}] ${msg}\n`);
   } catch {}
 }
 
 /**
- * Starts the Python FastAPI backend process silently without a terminal window.
+ * Starts the Python FastAPI backend process silently without any terminal window.
  */
 async function startBackendProcess(port) {
   const { isPackaged, backendExe, ffmpegDir } = getApplicationPaths();
@@ -113,6 +118,7 @@ async function startBackendProcess(port) {
   const spawnOptions = {
     detached: false,
     windowsHide: true,
+    shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   };
 
@@ -152,7 +158,7 @@ function waitForBackendHealthy(port, timeoutMs = 15000) {
         {
           host: "127.0.0.1",
           port: port,
-          path: "/",
+          path: "/api/system/info",
           timeout: 1000,
         },
         (res) => {
@@ -182,13 +188,16 @@ function waitForBackendHealthy(port, timeoutMs = 15000) {
 }
 
 /**
- * Gracefully terminates backend and any spawned child processes.
+ * Gracefully terminates backend and any spawned child processes without flashing a console.
  */
 function stopBackendProcess() {
   if (backendProcess && backendProcess.pid) {
     try {
       if (process.platform === "win32") {
-        execSync(`taskkill /pid ${backendProcess.pid} /T /F`, { stdio: "ignore" });
+        spawnSync("taskkill", ["/pid", String(backendProcess.pid), "/T", "/F"], {
+          windowsHide: true,
+          stdio: "ignore",
+        });
       } else {
         backendProcess.kill("SIGTERM");
       }
@@ -200,9 +209,11 @@ function stopBackendProcess() {
 }
 
 /**
- * Creates the primary application window.
+ * Creates the primary application window with an immediate branded loading screen.
  */
-function createMainWindow(port, isHealthy) {
+function createMainWindow() {
+  if (mainWindow) return;
+
   const iconPath = path.resolve(__dirname, "..", "video_cleaner.ico");
 
   mainWindow = new BrowserWindow({
@@ -214,6 +225,7 @@ function createMainWindow(port, isHealthy) {
     backgroundColor: "#0A0A0C",
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     autoHideMenuBar: true,
+    show: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -222,75 +234,191 @@ function createMainWindow(port, isHealthy) {
     },
   });
 
-  if (isHealthy) {
-    const { frontendDir } = getApplicationPaths();
-    const indexPath = path.join(frontendDir, "index.html");
-
-    if (fs.existsSync(indexPath)) {
-      mainWindow.loadFile(indexPath, { query: { apiPort: String(port) } });
-    } else {
-      // Dev mode fallback
-      mainWindow.loadURL(`http://127.0.0.1:5173/?apiPort=${port}`);
-    }
-  } else {
-    // Friendly startup failure display
-    mainWindow.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8" />
-        <title>Video Cleaner - Startup</title>
-        <style>
-          body {
-            background: #0A0A0C;
-            color: #F8FAFC;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-            text-align: center;
-          }
-          .box {
-            background: #14141A;
-            border: 1px solid rgba(212, 175, 55, 0.3);
-            border-radius: 16px;
-            padding: 40px;
-            max-width: 480px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.8);
-          }
-          h2 { color: #F3D079; margin-top: 0; }
-          p { color: #94A3B8; font-size: 14px; line-height: 1.6; }
-          .btn {
-            background: linear-gradient(135deg, #D4AF37 0%, #AA7C11 100%);
-            color: #0A0A0C;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
-            font-weight: 700;
-            cursor: pointer;
-            margin-top: 16px;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="box">
-          <h2>Video Cleaner couldn't start correctly</h2>
-          <p>The local video processing engine did not respond in time.<br/>Please restart the application.</p>
-          <p>If the problem continues, open <strong>Settings &rarr; Diagnostics</strong> or check your system permissions.</p>
-          <button class="btn" onclick="location.reload()">Retry Connection</button>
-        </div>
-      </body>
-      </html>
-    `)}`
-    );
-  }
+  // Display initial loading splash immediately
+  renderSplashScreen("Starting Video Cleaner...");
 
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+}
+
+function renderSplashScreen(statusText) {
+  if (!mainWindow) return;
+  mainWindow.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>Video Cleaner by Amna</title>
+      <style>
+        body {
+          background: #0A0A0C;
+          color: #F8FAFC;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          margin: 0;
+          user-select: none;
+        }
+        .splash-card {
+          text-align: center;
+          max-width: 420px;
+          padding: 40px;
+        }
+        .logo-box {
+          width: 64px;
+          height: 64px;
+          margin: 0 auto 20px;
+          border-radius: 16px;
+          background: linear-gradient(135deg, rgba(212, 175, 55, 0.3) 0%, rgba(212, 175, 55, 0.05) 100%);
+          border: 1px solid rgba(212, 175, 55, 0.4);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 0 30px rgba(212, 175, 55, 0.2);
+        }
+        .logo-box svg {
+          width: 32px;
+          height: 32px;
+          fill: none;
+          stroke: #F3D079;
+          stroke-width: 2.2;
+        }
+        h1 {
+          font-size: 22px;
+          font-weight: 800;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          background: linear-gradient(135deg, #FFF0B3 0%, #D4AF37 50%, #F5D77F 100%);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          margin: 0 0 6px 0;
+        }
+        .subtitle {
+          font-size: 11px;
+          color: #F3D079;
+          font-weight: 600;
+          letter-spacing: 0.04em;
+          margin-bottom: 24px;
+        }
+        .spinner {
+          width: 36px;
+          height: 36px;
+          margin: 0 auto 16px;
+          border: 3px solid rgba(212, 175, 55, 0.15);
+          border-top-color: #D4AF37;
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        .status {
+          font-size: 13px;
+          color: #94A3B8;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="splash-card">
+        <div class="logo-box">
+          <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
+        </div>
+        <h1>Video Cleaner</h1>
+        <div class="subtitle">by Amna</div>
+        <div class="spinner"></div>
+        <div class="status">${statusText}</div>
+      </div>
+    </body>
+    </html>
+  `)}`
+  );
+}
+
+function loadApplicationUI(port) {
+  if (!mainWindow) return;
+  const { frontendDir } = getApplicationPaths();
+  const indexPath = path.join(frontendDir, "index.html");
+
+  if (fs.existsSync(indexPath)) {
+    logToFile(`Loading bundled production frontend: ${indexPath}`);
+    mainWindow.loadFile(indexPath, { query: { apiPort: String(port) } });
+  } else {
+    logToFile(`Dev mode: loading http://127.0.0.1:5173/?apiPort=${port}`);
+    mainWindow.loadURL(`http://127.0.0.1:5173/?apiPort=${port}`);
+  }
+}
+
+function showStartupError() {
+  if (!mainWindow) return;
+  mainWindow.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>Video Cleaner - Startup Error</title>
+      <style>
+        body {
+          background: #0A0A0C;
+          color: #F8FAFC;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          margin: 0;
+          text-align: center;
+        }
+        .box {
+          background: #14141A;
+          border: 1px solid rgba(212, 175, 55, 0.3);
+          border-radius: 16px;
+          padding: 40px;
+          max-width: 480px;
+          box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+        }
+        h2 { color: #F3D079; margin-top: 0; }
+        p { color: #94A3B8; font-size: 14px; line-height: 1.6; }
+        .actions {
+          display: flex;
+          gap: 10px;
+          justify-content: center;
+          margin-top: 24px;
+        }
+        .btn {
+          background: linear-gradient(135deg, #D4AF37 0%, #AA7C11 100%);
+          color: #0A0A0C;
+          border: none;
+          padding: 10px 18px;
+          border-radius: 8px;
+          font-weight: 700;
+          cursor: pointer;
+          font-size: 13px;
+        }
+        .btn-secondary {
+          background: rgba(255, 255, 255, 0.08);
+          color: #F8FAFC;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+      </style>
+    </head>
+    <body>
+      <div class="box">
+        <h2>Video Cleaner couldn't start correctly</h2>
+        <p>The local video processing engine did not respond in time.<br/>No changes were made to your videos.</p>
+        <div class="actions">
+          <button class="btn" onclick="location.reload()">Retry Connection</button>
+          <button class="btn btn-secondary" onclick="window.electronAPI?.openLogsFolder()">View Logs</button>
+        </div>
+      </div>
+    </body>
+    </html>
+  `)}`
+  );
 }
 
 // Setup IPC Handlers
@@ -303,12 +431,12 @@ ipcMain.handle("open-directory", async (_event, dirPath) => {
 });
 
 ipcMain.handle("open-logs-folder", async () => {
-  const appData = process.env.APPDATA || path.join(app.getPath("home"), "AppData", "Roaming");
-  const logsDir = path.join(appData, "Video Cleaner", "logs");
-  if (!fs.existsSync(logsDir)) {
-    fs.mkdirSync(logsDir, { recursive: true });
-  }
+  const logsDir = getLogsDirectory();
   shell.openPath(logsDir);
+});
+
+ipcMain.handle("open-dashboard", async () => {
+  shell.openExternal(`http://127.0.0.1:${activePort}/dashboard`);
 });
 
 ipcMain.handle("select-directory", async () => {
@@ -333,14 +461,27 @@ ipcMain.handle("check-for-updates", async () => {
 
 // App Lifecycle
 app.whenReady().then(async () => {
-  activePort = await findFreePort(8000);
-  await startBackendProcess(activePort);
-  const isHealthy = await waitForBackendHealthy(activePort, 12000);
-  createMainWindow(activePort, isHealthy);
+  createMainWindow();
+
+  try {
+    activePort = await findFreePort(8000);
+    renderSplashScreen("Starting local video processing engine...");
+    await startBackendProcess(activePort);
+    const isHealthy = await waitForBackendHealthy(activePort, 15000);
+
+    if (isHealthy) {
+      loadApplicationUI(activePort);
+    } else {
+      showStartupError();
+    }
+  } catch (err) {
+    logToFile(`Startup error: ${err.message}`);
+    showStartupError();
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow(activePort, isHealthy);
+      createMainWindow();
     }
   });
 });

@@ -15,6 +15,7 @@ import {
   Film
 } from "lucide-react";
 import { getApiEndpoint } from "../config/api";
+import { setAnalyticsConsent, getAnalyticsConsent } from "../services/analytics";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -495,9 +496,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   <input
                     type="checkbox"
                     checked={analyticsEnabled}
-                    onChange={(e) => {
+                    onChange={async (e) => {
                       const enabled = e.target.checked;
                       setAnalyticsEnabled(enabled);
+                      await setAnalyticsConsent(enabled ? "enabled" : "disabled");
                       handleSaveSettings({ analytics_enabled: enabled });
                     }}
                     style={{ width: "18px", height: "18px", accentColor: "#D4AF37", cursor: "pointer" }}
@@ -558,6 +560,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 </button>
                 <button type="button" className="btn btn-secondary" onClick={handleOpenLogsFolder} style={{ fontSize: "12px" }}>
                   <FolderOpen size={14} /> Open Logs Folder
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    if (window.electronAPI?.openDashboard) {
+                      window.electronAPI.openDashboard();
+                    } else {
+                      window.open(getApiEndpoint("/dashboard"), "_blank");
+                    }
+                  }}
+                  style={{ fontSize: "12px" }}
+                >
+                  <ExternalLink size={14} /> Developer Dashboard
                 </button>
               </div>
 

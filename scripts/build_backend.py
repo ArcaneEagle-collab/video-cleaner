@@ -42,7 +42,9 @@ hidden_imports = [
     "backend.analysis.background_detector",
     "backend.analysis.motion_detector",
     "backend.analysis.duplicate_detector",
-    "backend.analysis.classifier"
+    "backend.analysis.classifier",
+    "backend.analytics.store",
+    "sqlite3"
 ]
 
 cmd = [

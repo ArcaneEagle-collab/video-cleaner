@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Header } from "./components/Header";
 import { UploadZone } from "./components/UploadZone";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -8,10 +8,12 @@ import { VisualTimeline } from "./components/VisualTimeline";
 import { SegmentTable } from "./components/SegmentTable";
 import { ExportModal } from "./components/ExportModal";
 import { SettingsModal } from "./components/SettingsModal";
+import { AnalyticsConsentModal } from "./components/AnalyticsConsentModal";
 import { BatchQueue, BatchItem } from "./components/BatchQueue";
 import { RecentProjects } from "./components/RecentProjects";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { getApiEndpoint } from "./config/api";
+import { getAnalyticsConsent, trackEvent } from "./services/analytics";
 import {
   VideoMetadata,
   Segment,
@@ -25,6 +27,7 @@ import { Download, Sliders, ArrowLeft, CheckCircle2, RotateCcw, Sparkles } from 
 export function App() {
   const [activeTab, setActiveTab] = useState<"workspace" | "batch" | "projects">("workspace");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isConsentModalOpen, setIsConsentModalOpen] = useState(() => getAnalyticsConsent() === "unset");
 
   // Video State
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
@@ -76,6 +79,11 @@ export function App() {
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
 
+  // Initial mount lifecycle
+  useEffect(() => {
+    trackEvent("app_started");
+  }, []);
+
   // WebSocket Callbacks
   const handleProgress = useCallback((data: ProgressData) => {
     setProgress(data);
@@ -88,6 +96,7 @@ export function App() {
         setActiveSegmentId(res.segments[0].id);
       }
       setWorkflowStep("review");
+      trackEvent("analysis_completed", { segments_count: res.segments.length });
     }
   }, []);
 
@@ -95,12 +104,14 @@ export function App() {
     alert(`Analysis Error: ${err}`);
     setWorkflowStep("import");
     setIsCancelling(false);
+    trackEvent("processing_error", { error_type: "pipeline_error" });
   }, []);
 
   const handleCancelled = useCallback(() => {
     setWorkflowStep("import");
     setIsCancelling(false);
     setProgress(null);
+    trackEvent("processing_cancelled");
   }, []);
 
   const { isConnected } = useWebSocket(
@@ -126,6 +137,7 @@ export function App() {
     });
 
     try {
+      trackEvent("analysis_started");
       const res = await fetch(getApiEndpoint("/api/analyze"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -253,7 +265,14 @@ export function App() {
       });
       const data = await res.json();
       setExportResult(data);
+      if (exportSettings.export_combined) {
+        trackEvent("clean_video_exported");
+      }
+      if (exportSettings.export_individual) {
+        trackEvent("clip_exported", { clips_count: keptClipsCount });
+      }
     } catch (err: any) {
+      trackEvent("export_error", { error_type: "export_failed" });
       alert(`Export failed: ${err.message}`);
     } finally {
       setIsExporting(false);
@@ -359,7 +378,10 @@ export function App() {
             <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
               <UploadZone
                 metadata={metadata}
-                onVideoSelected={(meta) => setMetadata(meta)}
+                onVideoSelected={(meta) => {
+                  setMetadata(meta);
+                  trackEvent("video_imported", { duration_approx: Math.round(meta.duration) });
+                }}
                 isUploading={isUploading}
                 setIsUploading={setIsUploading}
               />
@@ -514,6 +536,12 @@ export function App() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+      />
+
+      {/* First-Launch Analytics Consent Modal */}
+      <AnalyticsConsentModal
+        isOpen={isConsentModalOpen}
+        onClose={() => setIsConsentModalOpen(false)}
       />
     </div>
   );

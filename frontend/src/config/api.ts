@@ -12,6 +12,7 @@ declare global {
       openDirectory?: (path: string) => Promise<void>;
       selectDirectory?: () => Promise<string | null>;
       checkForUpdates?: () => Promise<{ hasUpdate: boolean; currentVersion: string; latestVersion?: string; message: string }>;
+      openDashboard?: () => Promise<void>;
       onVideoDropped?: (callback: (filePath: string) => void) => void;
     };
   }

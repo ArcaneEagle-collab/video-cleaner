@@ -1,16 +1,18 @@
 import os
+import sys
 import shutil
 import uuid
 import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Header
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 from ..video.ffprobe import probe_video, get_ffmpeg_path, get_ffprobe_path
 from ..analysis.classifier import VideoAnalysisPipeline
 from ..video.exporter import VideoExporter
+from ..analytics.store import record_event, get_metrics_summary
 from ..config import (
     get_temp_dir,
     get_appdata_dir,
@@ -24,6 +26,7 @@ from ..config import (
 from .websocket import ws_manager
 
 router = APIRouter(prefix="/api")
+dashboard_router = APIRouter(prefix="/dashboard")
 
 def get_upload_dir() -> Path:
     p = get_temp_dir() / "uploads"
@@ -408,3 +411,68 @@ async def clear_system_logs():
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to clear logs: {e}")
     return {"status": "success", "message": "Logs cleared successfully"}
+
+# --- Anonymous Analytics & Telemetry Ingestion ---
+
+class AnalyticsEventPayload(BaseModel):
+    install_id: str
+    event_name: str
+    app_version: str = "1.0.0"
+    metadata: Optional[Dict[str, Any]] = None
+
+@router.post("/events")
+async def ingest_analytics_event(payload: AnalyticsEventPayload):
+    settings = load_settings()
+    # Check if analytics is enabled (allowed to report disabled event)
+    if not settings.get("analytics_enabled", True) and payload.event_name != "analytics_disabled":
+        return {"status": "ignored", "reason": "analytics_disabled"}
+
+    success = record_event(
+        install_id=payload.install_id,
+        event_name=payload.event_name,
+        app_version=payload.app_version,
+        os_platform="Windows",
+        metadata=payload.metadata
+    )
+    return {"status": "recorded" if success else "invalid"}
+
+# --- Private Developer Analytics Dashboard ---
+
+def get_dashboard_html_path() -> Path:
+    if getattr(sys, "frozen", False):
+        base_dir = Path(sys.executable).parent
+        candidates = [
+            base_dir / "_internal" / "backend" / "analytics" / "dashboard.html",
+            base_dir / "backend" / "analytics" / "dashboard.html",
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+    return Path(__file__).resolve().parent.parent / "analytics" / "dashboard.html"
+
+@dashboard_router.get("", response_class=HTMLResponse)
+@dashboard_router.get("/", response_class=HTMLResponse)
+async def serve_dashboard():
+    dash_file = get_dashboard_html_path()
+    if not dash_file.exists():
+        raise HTTPException(status_code=404, detail="Dashboard template not found.")
+    return HTMLResponse(content=dash_file.read_text(encoding="utf-8"))
+
+@dashboard_router.get("/api/metrics")
+async def get_dashboard_metrics(authorization: Optional[str] = Header(None)):
+    admin_password = os.environ.get("ANALYTICS_ADMIN_PASSWORD", "amna-admin")
+    valid = False
+    if authorization:
+        token = authorization.replace("Bearer ", "").replace("Basic ", "").strip()
+        if token == admin_password:
+            valid = True
+
+    if not valid:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized. Enter developer admin password.",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    return get_metrics_summary()
+

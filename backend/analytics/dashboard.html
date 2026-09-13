@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Cleaner — Developer Analytics Dashboard</title>
+  <style>
+    :root {
+      --bg-primary: #0A0A0C;
+      --bg-card: #14141A;
+      --bg-elevated: #1C1C24;
+      --border: rgba(212, 175, 55, 0.2);
+      --gold-primary: #D4AF37;
+      --gold-light: #F3D079;
+      --gold-gradient: linear-gradient(135deg, #FFF0B3 0%, #D4AF37 50%, #F5D77F 100%);
+      --text-main: #F8FAFC;
+      --text-muted: #94A3B8;
+      --success: #10B981;
+      --error: #EF4444;
+      --accent: #6366F1;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 32px 24px;
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .title-group h1 {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: var(--gold-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .title-group p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(212, 175, 55, 0.15);
+      border: 1px solid var(--border);
+      color: var(--gold-light);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 18px;
+      margin-bottom: 28px;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+      gap: 20px;
+      margin-bottom: 28px;
+    }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+    }
+    .card-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .metric-value {
+      font-size: 28px;
+      font-weight: 800;
+      color: #FFF;
+    }
+    .metric-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .table-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 28px;
+    }
+    .table-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--gold-light);
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 10px 14px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    th {
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .notice-box {
+      background: rgba(212, 175, 55, 0.06);
+      border: 1px solid rgba(212, 175, 55, 0.25);
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 28px;
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .btn {
+      background: var(--gold-gradient);
+      color: #0A0A0C;
+      font-weight: 700;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .auth-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 10, 12, 0.96);
+      backdrop-filter: blur(10px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+    }
+    .auth-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 36px;
+      width: 100%;
+      max-width: 380px;
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+    }
+    .auth-box input {
+      width: 100%;
+      background: #0A0A0C;
+      border: 1px solid var(--border);
+      color: #FFF;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin: 16px 0;
+      font-size: 14px;
+      text-align: center;
+    }
+    .auth-box input:focus {
+      outline: none;
+      border-color: var(--gold-primary);
+    }
+  </style>
+</head>
+<body>
+  <!-- Authentication Modal -->
+  <div id="authModal" class="auth-overlay">
+    <div class="auth-box">
+      <div style="font-size: 32px; margin-bottom: 12px;">🔒</div>
+      <h2 style="font-size: 18px; color: var(--gold-light);">Developer Dashboard</h2>
+      <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Private authenticated access only</p>
+      <input type="password" id="adminPassword" placeholder="Enter Admin Password" onkeydown="if(event.key==='Enter') verifyAuth()" />
+      <button class="btn" style="width: 100%;" onclick="verifyAuth()">Unlock Dashboard</button>
+      <div id="authError" style="color: var(--error); font-size: 12px; margin-top: 10px; display: none;">Invalid password</div>
+    </div>
+  </div>
+
+  <div class="container" id="dashContent" style="display: none;">
+    <header>
+      <div class="title-group">
+        <h1>Video Cleaner — Developer Analytics</h1>
+        <p>Private telemetry and performance monitoring dashboard • Made by Amna</p>
+      </div>
+      <div>
+        <span class="badge" id="lastUpdated">Updated: Just now</span>
+        <button class="btn" style="margin-left: 10px;" onclick="fetchMetrics()">Refresh</button>
+      </div>
+    </header>
+
+    <!-- Downloads vs Installations Notice -->
+    <div class="notice-box">
+      <div style="font-size: 20px;">ℹ️</div>
+      <div>
+        <strong style="color: var(--gold-light);">Metric Transparency:</strong>
+        Downloads (from GitHub Releases) vs Anonymous Installations (from first launch events) vs Active Users are tracked separately. No video frames, filenames, or personal user data are collected.
+      </div>
+    </div>
+
+    <!-- Overview Stats Grid -->
+    <div class="grid-4">
+      <div class="card">
+        <div class="card-title">Total Installations</div>
+        <div class="metric-value" id="valTotalInstalls">0</div>
+        <div class="metric-sub">Distinct anonymous install UUIDs</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Active Today / Week</div>
+        <div class="metric-value"><span id="valActiveToday">0</span> <span style="font-size: 16px; color: var(--text-muted);">/ <span id="valActiveWeek">0</span></span></div>
+        <div class="metric-sub">Active in last 24h & 7 days</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Videos Processed</div>
+        <div class="metric-value" id="valVideosProcessed">0</div>
+        <div class="metric-sub"><span id="valAnalysesCompleted">0</span> completed analyses</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Pipeline Success Rate</div>
+        <div class="metric-value" style="color: var(--success);" id="valSuccessRate">100%</div>
+        <div class="metric-sub"><span id="valCleanVideos">0</span> master & <span id="valClips">0</span> clips exported</div>
+      </div>
+    </div>
+
+    <!-- Features & Versions -->
+    <div class="grid-2">
+      <div class="table-card">
+        <div class="table-title">Feature & Event Usage</div>
+        <table id="tblEvents">
+          <thead>
+            <tr>
+              <th>Event Name</th>
+              <th>Total Occurrences</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td colspan="2" style="text-align: center; color: var(--text-muted);">Loading events...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-card">
+        <div class="table-title">Installed App Versions</div>
+        <table id="tblVersions">
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Installations</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td colspan="2" style="text-align: center; color: var(--text-muted);">Loading versions...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Recent Errors Section -->
+    <div class="table-card">
+      <div class="table-title">
+        <span>Recent Operational Telemetry & Errors</span>
+        <span class="badge" id="badgeErrorRate" style="color: var(--error); border-color: rgba(239, 68, 68, 0.4);">Error Rate: 0%</span>
+      </div>
+      <table id="tblErrors">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Category</th>
+            <th>App Version</th>
+            <th>Sanitized Context</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No recent errors recorded. All systems healthy.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let currentAuthToken = sessionStorage.getItem("vc_admin_key") || "";
+
+    if (currentAuthToken) {
+      checkAuth(currentAuthToken);
+    }
+
+    async function verifyAuth() {
+      const pwd = document.getElementById("adminPassword").value.trim();
+      if (!pwd) return;
+      await checkAuth(pwd);
+    }
+
+    async function checkAuth(token) {
+      try {
+        const res = await fetch("/dashboard/api/metrics", {
+          headers: { "Authorization": "Bearer " + token }
+        });
+        if (res.ok) {
+          sessionStorage.setItem("vc_admin_key", token);
+          currentAuthToken = token;
+          document.getElementById("authModal").style.display = "none";
+          document.getElementById("dashContent").style.display = "block";
+          const data = await res.json();
+          renderDashboard(data);
+        } else {
+          document.getElementById("authError").style.display = "block";
+        }
+      } catch (err) {
+        document.getElementById("authError").innerText = "Connection error";
+        document.getElementById("authError").style.display = "block";
+      }
+    }
+
+    async function fetchMetrics() {
+      if (!currentAuthToken) return;
+      try {
+        const res = await fetch("/dashboard/api/metrics", {
+          headers: { "Authorization": "Bearer " + currentAuthToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderDashboard(data);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderDashboard(data) {
+      const ov = data.overview || {};
+      document.getElementById("valTotalInstalls").innerText = ov.total_installations || 0;
+      document.getElementById("valActiveToday").innerText = ov.active_today || 0;
+      document.getElementById("valActiveWeek").innerText = ov.active_this_week || 0;
+      document.getElementById("valVideosProcessed").innerText = ov.total_videos_processed || 0;
+      document.getElementById("valAnalysesCompleted").innerText = ov.analyses_completed || 0;
+      document.getElementById("valCleanVideos").innerText = ov.total_clean_videos_exported || 0;
+      document.getElementById("valClips").innerText = ov.total_clips_exported || 0;
+      document.getElementById("valSuccessRate").innerText = (ov.success_rate || 100) + "%";
+      document.getElementById("badgeErrorRate").innerText = "Error Rate: " + (ov.error_rate || 0) + "%";
+      document.getElementById("lastUpdated").innerText = "Updated: " + (data.last_updated || "Just now");
+
+      // Events Table
+      const events = data.event_counts || {};
+      const evTbody = document.querySelector("#tblEvents tbody");
+      const evKeys = Object.keys(events);
+      if (evKeys.length === 0) {
+        evTbody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-muted);">No events logged yet.</td></tr>';
+      } else {
+        evTbody.innerHTML = evKeys.map(k => `
+          <tr>
+            <td><code>${k}</code></td>
+            <td style="font-weight: 700;">${events[k]}</td>
+          </tr>
+        `).join("");
+      }
+
+      // Versions Table
+      const versions = data.versions || {};
+      const verTbody = document.querySelector("#tblVersions tbody");
+      const verKeys = Object.keys(versions);
+      if (verKeys.length === 0) {
+        verTbody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-muted);">No version data.</td></tr>';
+      } else {
+        verTbody.innerHTML = verKeys.map(k => `
+          <tr>
+            <td><span class="badge">${k}</span></td>
+            <td style="font-weight: 700;">${versions[k]}</td>
+          </tr>
+        `).join("");
+      }
+
+      // Errors Table
+      const errors = data.recent_errors || [];
+      const errTbody = document.querySelector("#tblErrors tbody");
+      if (errors.length === 0) {
+        errTbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--success);">✓ No recent errors recorded. All systems healthy.</td></tr>';
+      } else {
+        errTbody.innerHTML = errors.map(err => `
+          <tr>
+            <td style="color: var(--text-muted);">${err.time_formatted}</td>
+            <td><code style="color: var(--error);">${err.category}</code></td>
+            <td>${err.version}</td>
+            <td style="font-family: monospace; font-size: 11px;">${JSON.stringify(err.details || {})}</td>
+          </tr>
+        `).join("");
+      }
+    }
+  </script>
+</body>
+</html>

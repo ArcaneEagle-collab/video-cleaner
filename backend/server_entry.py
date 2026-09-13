@@ -9,6 +9,7 @@ if getattr(sys, "frozen", False):
     # Running in PyInstaller bundle
     bundle_dir = Path(sys.executable).parent
     sys.path.insert(0, str(bundle_dir))
+    sys.path.insert(0, str(bundle_dir / "_internal"))
 else:
     root_dir = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(root_dir))
@@ -53,27 +54,35 @@ def main():
 
     print(f"--- Starting Video Cleaner Backend 1.0.0 (Host: {args.host}, Port: {args.port}) ---")
 
-    # Import backend app
-    from backend.main import app
-    import uvicorn
+    try:
+        # Import backend app
+        from backend.main import app
+        import uvicorn
 
-    # Setup graceful termination handler
-    def handle_exit(signum, frame):
-        print(f"Received shutdown signal ({signum}), closing backend...")
-        sys.exit(0)
+        # Setup graceful termination handler
+        def handle_exit(signum, frame):
+            print(f"Received shutdown signal ({signum}), closing backend...")
+            sys.exit(0)
 
-    signal.signal(signal.SIGINT, handle_exit)
-    signal.signal(signal.SIGTERM, handle_exit)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, handle_exit)
+        signal.signal(signal.SIGINT, handle_exit)
+        signal.signal(signal.SIGTERM, handle_exit)
+        if hasattr(signal, "SIGBREAK"):
+            signal.signal(signal.SIGBREAK, handle_exit)
 
-    uvicorn.run(
-        app,
-        host=args.host,
-        port=args.port,
-        log_level="info",
-        access_log=False
-    )
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level="info",
+            access_log=False
+        )
+    except Exception as e:
+        import traceback
+        print(f"FATAL: Backend failed to start: {e}")
+        traceback.print_exc()
+        if hasattr(sys.stdout, "flush"):
+            sys.stdout.flush()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
