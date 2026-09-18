@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 def compute_dhash(image_gray: np.ndarray, hash_size: int = 8) -> int:
     """Computes difference hash (dHash) for fast perceptual image comparison."""
@@ -12,30 +12,43 @@ def hamming_distance(hash1: int, hash2: int) -> int:
     """Computes bitwise Hamming distance between two integer hashes."""
     return bin(hash1 ^ hash2).count('1')
 
-def compute_ssim_approx(img1_gray: np.ndarray, img2_gray: np.ndarray) -> float:
+def compute_ssim_approx(
+    img1_gray: np.ndarray,
+    img2_gray: np.ndarray,
+    stats1: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None,
+    stats2: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None
+) -> Tuple[float, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
     """
     Computes Structural Similarity Index (SSIM) approximation
-    between two grayscale frames.
+    between two grayscale frames using float32 for maximum throughput.
+    Returns (ssim_score, stats1, stats2).
     """
-    C1 = (0.01 * 255) ** 2
-    C2 = (0.03 * 255) ** 2
+    C1 = np.float32((0.01 * 255) ** 2)
+    C2 = np.float32((0.03 * 255) ** 2)
 
-    img1 = img1_gray.astype(np.float64)
-    img2 = img2_gray.astype(np.float64)
+    if stats1 is not None:
+        img1, mu1, mu1_sq, sigma1_sq = stats1
+    else:
+        img1 = img1_gray.astype(np.float32)
+        mu1 = cv2.GaussianBlur(img1, (11, 11), 1.5)
+        mu1_sq = mu1 ** 2
+        sigma1_sq = cv2.GaussianBlur(img1 ** 2, (11, 11), 1.5) - mu1_sq
+        stats1 = (img1, mu1, mu1_sq, sigma1_sq)
 
-    mu1 = cv2.GaussianBlur(img1, (11, 11), 1.5)
-    mu2 = cv2.GaussianBlur(img2, (11, 11), 1.5)
+    if stats2 is not None:
+        img2, mu2, mu2_sq, sigma2_sq = stats2
+    else:
+        img2 = img2_gray.astype(np.float32)
+        mu2 = cv2.GaussianBlur(img2, (11, 11), 1.5)
+        mu2_sq = mu2 ** 2
+        sigma2_sq = cv2.GaussianBlur(img2 ** 2, (11, 11), 1.5) - mu2_sq
+        stats2 = (img2, mu2, mu2_sq, sigma2_sq)
 
-    mu1_sq = mu1 ** 2
-    mu2_sq = mu2 ** 2
     mu1_mu2 = mu1 * mu2
-
-    sigma1_sq = cv2.GaussianBlur(img1 ** 2, (11, 11), 1.5) - mu1_sq
-    sigma2_sq = cv2.GaussianBlur(img2 ** 2, (11, 11), 1.5) - mu2_sq
     sigma12 = cv2.GaussianBlur(img1 * img2, (11, 11), 1.5) - mu1_mu2
 
-    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
-    return float(np.clip(np.mean(ssim_map), 0.0, 1.0))
+    ssim_map = ((2.0 * mu1_mu2 + C1) * (2.0 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+    return float(np.clip(np.mean(ssim_map), 0.0, 1.0)), stats1, stats2
 
 class StaticImageDetector:
     """
@@ -66,8 +79,11 @@ class StaticImageDetector:
         hist_corrs = []
         dhash_diffs = []
         noise_variances = []
-
         max_diffs = []
+
+        prev_stats = None
+        prev_dhash = None
+        prev_hist = None
 
         for i in range(len(frames) - 1):
             try:
@@ -75,12 +91,15 @@ class StaticImageDetector:
                 _, bgr2, gray2 = frames[i + 1]
 
                 if gray1 is None or gray2 is None or gray1.size == 0 or gray2.size == 0:
+                    prev_stats, prev_dhash, prev_hist = None, None, None
                     continue
                 if gray1.shape != gray2.shape:
+                    prev_stats, prev_dhash, prev_hist = None, None, None
                     continue
 
-                # 1. SSIM
-                ssim_val = compute_ssim_approx(gray1, gray2)
+                # 1. SSIM (reusing Gaussian statistics of shared frame)
+                ssim_val, _, next_stats = compute_ssim_approx(gray1, gray2, stats1=prev_stats)
+                prev_stats = next_stats
                 ssim_scores.append(ssim_val)
 
                 # 2. Mean and max absolute pixel difference
@@ -98,21 +117,27 @@ class StaticImageDetector:
                     temporal_noise = float(np.std(abs_diff))
                 noise_variances.append(temporal_noise)
 
-                # 4. dHash distance
-                h1 = compute_dhash(gray1)
+                # 4. dHash distance (cached)
+                h1 = prev_dhash if prev_dhash is not None else compute_dhash(gray1)
                 h2 = compute_dhash(gray2)
+                prev_dhash = h2
                 dhash_diffs.append(hamming_distance(h1, h2))
 
-                # 5. Color histogram correlation
+                # 5. Color histogram correlation (cached)
                 if bgr1 is not None and bgr2 is not None and bgr1.shape == bgr2.shape:
                     h_bins, s_bins = 16, 16
-                    hist1 = cv2.calcHist([cv2.cvtColor(bgr1, cv2.COLOR_BGR2HSV)], [0, 1], None, [h_bins, s_bins], [0, 180, 0, 256])
+                    hist1 = prev_hist if prev_hist is not None else cv2.calcHist([cv2.cvtColor(bgr1, cv2.COLOR_BGR2HSV)], [0, 1], None, [h_bins, s_bins], [0, 180, 0, 256])
+                    if prev_hist is None:
+                        cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+
                     hist2 = cv2.calcHist([cv2.cvtColor(bgr2, cv2.COLOR_BGR2HSV)], [0, 1], None, [h_bins, s_bins], [0, 180, 0, 256])
-                    cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
                     cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+                    prev_hist = hist2
+
                     corr = float(cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL))
                     hist_corrs.append(corr)
                 else:
+                    prev_hist = None
                     hist_corrs.append(1.0)
             except Exception:
                 continue

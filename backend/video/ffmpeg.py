@@ -34,6 +34,32 @@ class VideoFrameSampler:
         else:
             self.target_w = orig_w
             self.target_h = orig_h
+        self.current_frame_pos = -1
+
+    def _seek_and_read(self, target_idx: int) -> Optional[np.ndarray]:
+        """
+        Reads frame at target_idx. Uses fast forward grab() if target is close
+        ahead of current position, avoiding expensive demuxer resets and keyframe rewinds.
+        """
+        if self.total_frames > 0:
+            target_idx = min(self.total_frames - 1, max(0, target_idx))
+        else:
+            target_idx = max(0, target_idx)
+
+        # If target is behind current pos or too far ahead (> 45 frames), do a seek
+        if self.current_frame_pos < 0 or target_idx < self.current_frame_pos or (target_idx - self.current_frame_pos) > 45:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
+            self.current_frame_pos = target_idx
+
+        # Fast forward grab until target
+        while self.current_frame_pos < target_idx:
+            if not self.cap.grab():
+                break
+            self.current_frame_pos += 1
+
+        ret, frame = self.cap.read()
+        self.current_frame_pos += 1
+        return frame if ret and frame is not None else None
 
     def sample_all_frames(self) -> List[Tuple[float, np.ndarray, np.ndarray]]:
         """
@@ -43,6 +69,7 @@ class VideoFrameSampler:
         sampled = []
         frame_idx = 0
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        self.current_frame_pos = 0
         
         while True:
             ret, frame = self.cap.read()
@@ -56,8 +83,92 @@ class VideoFrameSampler:
                 sampled.append((timestamp, resized, gray))
                 
             frame_idx += 1
+            self.current_frame_pos += 1
             
         return sampled
+
+    def sample_scene_data(
+        self,
+        start_sec: float,
+        end_sec: float,
+        count: int = 5,
+        pair_count: int = 3,
+        dt: float = 0.12
+    ) -> Tuple[List[Tuple[float, np.ndarray, np.ndarray]], List[Tuple[float, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]]:
+        """
+        Extracts both range frames and fine pairs for a single scene in a single forward pass.
+        Eliminates duplicate seeks, keyframe rewinds, and decodes.
+        """
+        if end_sec <= start_sec:
+            end_sec = start_sec + 0.1
+
+        dur = end_sec - start_sec
+        if dur <= dt:
+            dt = max(0.04, dur * 0.5)
+
+        # 1. Compute range target indices
+        times = np.linspace(start_sec, end_sec, count)
+        range_requests: List[Tuple[float, int]] = []
+        for t in times:
+            fn = int(round(t * self.native_fps))
+            if self.total_frames > 0:
+                fn = min(self.total_frames - 1, max(0, fn))
+            range_requests.append((float(t), fn))
+
+        # 2. Compute fine pair checkpoints
+        if pair_count == 1:
+            checkpoints = [start_sec + dur * 0.5]
+        else:
+            checkpoints = [start_sec + dur * (i + 1) / (pair_count + 1) for i in range(pair_count)]
+
+        pair_requests: List[Tuple[float, int, int]] = []
+        for t in checkpoints:
+            t1 = min(t, max(0.0, end_sec - dt))
+            t2 = t1 + dt
+            f1_idx = int(round(t1 * self.native_fps))
+            f2_idx = int(round(t2 * self.native_fps))
+            if self.total_frames > 1:
+                f1_idx = min(self.total_frames - 2, max(0, f1_idx))
+                f2_idx = min(self.total_frames - 1, max(f1_idx + 1, f2_idx))
+            else:
+                f1_idx = max(0, f1_idx)
+                f2_idx = max(0, f2_idx)
+            pair_requests.append((float(t1), f1_idx, f2_idx))
+
+        # 3. Collect unique frame numbers in ascending order
+        needed_indices = set()
+        for _, fn in range_requests:
+            needed_indices.add(fn)
+        for _, f1, f2 in pair_requests:
+            needed_indices.add(f1)
+            needed_indices.add(f2)
+
+        sorted_indices = sorted(needed_indices)
+        frame_cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+
+        for fn in sorted_indices:
+            frame = self._seek_and_read(fn)
+            if frame is not None:
+                resized = cv2.resize(frame, (self.target_w, self.target_h), interpolation=cv2.INTER_AREA)
+                gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+                frame_cache[fn] = (resized, gray)
+
+        # 4. Assemble range frames
+        frames: List[Tuple[float, np.ndarray, np.ndarray]] = []
+        for t, fn in range_requests:
+            if fn in frame_cache:
+                r, g = frame_cache[fn]
+                frames.append((t, r, g))
+
+        # 5. Assemble fine pairs
+        pairs: List[Tuple[float, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+        for t1, f1, f2 in pair_requests:
+            if f1 in frame_cache and f2 in frame_cache:
+                r1, g1 = frame_cache[f1]
+                r2, g2 = frame_cache[f2]
+                pairs.append((t1, r1, g1, r2, g2))
+
+        return frames, pairs
 
     def sample_range(self, start_sec: float, end_sec: float, count: int = 5) -> List[Tuple[float, np.ndarray, np.ndarray]]:
         """
@@ -69,12 +180,9 @@ class VideoFrameSampler:
             
         times = np.linspace(start_sec, end_sec, count)
         for t in times:
-            frame_num = int(t * self.native_fps)
-            if self.total_frames > 0:
-                frame_num = min(self.total_frames - 1, max(0, frame_num))
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-            ret, frame = self.cap.read()
-            if ret and frame is not None:
+            frame_num = int(round(t * self.native_fps))
+            frame = self._seek_and_read(frame_num)
+            if frame is not None:
                 resized = cv2.resize(frame, (self.target_w, self.target_h), interpolation=cv2.INTER_AREA)
                 gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
                 results.append((float(t), resized, gray))
@@ -100,8 +208,8 @@ class VideoFrameSampler:
             t1 = min(t, max(0.0, end_sec - dt))
             t2 = t1 + dt
 
-            f1_idx = int(t1 * self.native_fps)
-            f2_idx = int(t2 * self.native_fps)
+            f1_idx = int(round(t1 * self.native_fps))
+            f2_idx = int(round(t2 * self.native_fps))
 
             if self.total_frames > 1:
                 f1_idx = min(self.total_frames - 2, max(0, f1_idx))
@@ -110,12 +218,10 @@ class VideoFrameSampler:
                 f1_idx = max(0, f1_idx)
                 f2_idx = max(0, f2_idx)
 
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, f1_idx)
-            ret1, frame1 = self.cap.read()
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, f2_idx)
-            ret2, frame2 = self.cap.read()
+            frame1 = self._seek_and_read(f1_idx)
+            frame2 = self._seek_and_read(f2_idx)
 
-            if ret1 and ret2 and frame1 is not None and frame2 is not None:
+            if frame1 is not None and frame2 is not None:
                 r1 = cv2.resize(frame1, (self.target_w, self.target_h), interpolation=cv2.INTER_AREA)
                 g1 = cv2.cvtColor(r1, cv2.COLOR_BGR2GRAY)
                 r2 = cv2.resize(frame2, (self.target_w, self.target_h), interpolation=cv2.INTER_AREA)
@@ -126,10 +232,9 @@ class VideoFrameSampler:
 
     def extract_thumbnail(self, timestamp: float, output_path: str, width: int = 320) -> bool:
         """Extract a single high-quality JPEG thumbnail at the specified timestamp."""
-        frame_num = max(0, int(timestamp * self.native_fps))
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-        ret, frame = self.cap.read()
-        if ret and frame is not None:
+        frame_num = max(0, int(round(timestamp * self.native_fps)))
+        frame = self._seek_and_read(frame_num)
+        if frame is not None:
             h, w = frame.shape[:2]
             scale = width / float(w)
             resized = cv2.resize(frame, (width, int(h * scale)), interpolation=cv2.INTER_AREA)

@@ -14,10 +14,11 @@ class ImageWithBackgroundDetector:
     7. Solid Letterbox / Pillarbox Bars with Still Photo
     8. Cutout on Plain or Uniform Backdrop
     """
-    def _compute_pair_stats(self, f1_bgr: np.ndarray, g1: np.ndarray, g2: np.ndarray) -> Optional[Dict[str, Any]]:
+    def _compute_pair_stats(self, f1_bgr: np.ndarray, g1: np.ndarray, g2: np.ndarray, flow: Optional[np.ndarray] = None) -> Optional[Dict[str, Any]]:
         h, w = g1.shape
         diff = cv2.absdiff(g1, g2)
-        flow = cv2.calcOpticalFlowFarneback(g1, g2, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+        if flow is None:
+            flow = cv2.calcOpticalFlowFarneback(g1, g2, None, 0.5, 3, 15, 3, 5, 1.2, 0)
         u, v = flow[..., 0], flow[..., 1]
         mag = np.hypot(u, v)
 
@@ -135,7 +136,7 @@ class ImageWithBackgroundDetector:
         # -------------------------------------------------------------
         # 5. Split-screen / Center Dividing Line Check
         # -------------------------------------------------------------
-        sobel_x = np.abs(cv2.Sobel(g1, cv2.CV_64F, 1, 0, ksize=3))
+        sobel_x = np.abs(cv2.Sobel(g1, cv2.CV_32F, 1, 0, ksize=3))
         col_profile = np.mean(sobel_x, axis=0)
         center_col_band = col_profile[int(w * 0.46):int(w * 0.54)]
         mid_split_peak = float(np.max(center_col_band)) / max(1.0, float(np.mean(col_profile)))
@@ -156,8 +157,8 @@ class ImageWithBackgroundDetector:
         # -------------------------------------------------------------
         left_w = int(w * 0.20)
         right_w = int(w * 0.80)
-        cen_lap = float(cv2.Laplacian(g1[:, left_w:right_w], cv2.CV_64F).var())
-        wings_lap = float((cv2.Laplacian(g1[:, :left_w], cv2.CV_64F).var() + cv2.Laplacian(g1[:, right_w:], cv2.CV_64F).var()) / 2.0)
+        cen_lap = float(cv2.Laplacian(g1[:, left_w:right_w], cv2.CV_32F).var())
+        wings_lap = float((cv2.Laplacian(g1[:, :left_w], cv2.CV_32F).var() + cv2.Laplacian(g1[:, right_w:], cv2.CV_32F).var()) / 2.0)
         wings_color_var = float((np.mean(np.var(f1_bgr[:, :left_w], axis=(0, 1))) + np.mean(np.var(f1_bgr[:, right_w:], axis=(0, 1)))) / 2.0)
 
         return {
@@ -185,14 +186,19 @@ class ImageWithBackgroundDetector:
 
         pair_stats = []
 
-        for _, f1_bgr, g1, _, g2 in pairs:
+        for pair in pairs:
+            f1_bgr = pair[1]
+            g1 = pair[2]
+            g2 = pair[4]
+            flow = pair[5] if len(pair) >= 6 else None
+
             if f1_bgr is None or g1 is None or g2 is None or g1.size == 0 or g2.size == 0:
                 continue
             if g1.shape != g2.shape:
                 continue
 
             try:
-                st = self._compute_pair_stats(f1_bgr, g1, g2)
+                st = self._compute_pair_stats(f1_bgr, g1, g2, flow=flow)
                 if st:
                     pair_stats.append(st)
             except Exception:

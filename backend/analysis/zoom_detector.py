@@ -26,18 +26,23 @@ class ZoomPanDetector:
         inliers_list = []
         pan_mags = []
 
-        for _, _, gray1, _, gray2 in pairs:
+        for pair in pairs:
             try:
+                gray1 = pair[2]
+                gray2 = pair[4]
                 if gray1 is None or gray2 is None or gray1.size == 0 or gray2.size == 0:
                     continue
                 if gray1.shape != gray2.shape:
                     continue
 
-                flow = cv2.calcOpticalFlowFarneback(
-                    gray1, gray2, None,
-                    pyr_scale=0.5, levels=3, winsize=15,
-                    iterations=3, poly_n=5, poly_sigma=1.2, flags=0
-                )
+                if len(pair) >= 6 and pair[5] is not None:
+                    flow = pair[5]
+                else:
+                    flow = cv2.calcOpticalFlowFarneback(
+                        gray1, gray2, None,
+                        pyr_scale=0.5, levels=3, winsize=15,
+                        iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+                    )
 
                 u = flow[..., 0]
                 v = flow[..., 1]

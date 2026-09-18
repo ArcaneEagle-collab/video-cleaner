@@ -35,7 +35,13 @@ class MotionDetector:
         complexities = []
         similarities = []
 
-        for i in range(len(frames) - 1):
+        total_pairs = len(frames) - 1
+        if total_pairs <= 4:
+            selected_indices = list(range(total_pairs))
+        else:
+            selected_indices = sorted(list(set([int(round(i * (total_pairs - 1) / 3.0)) for i in range(4)])))
+
+        for i in selected_indices:
             try:
                 _, _, gray1 = frames[i]
                 _, _, gray2 = frames[i + 1]
@@ -46,7 +52,7 @@ class MotionDetector:
                     continue
 
                 # Scene complexity (Laplacian variance)
-                lap = cv2.Laplacian(gray1, cv2.CV_64F)
+                lap = cv2.Laplacian(gray1, cv2.CV_32F)
                 complexities.append(float(np.var(lap)))
 
                 # Optical flow
@@ -84,18 +90,20 @@ class MotionDetector:
                 local_motion_variances.append(local_var)
 
                 # Edge change: difference in Sobel edge maps
-                sobel1 = cv2.Sobel(gray1, cv2.CV_64F, 1, 1, ksize=3)
-                sobel2 = cv2.Sobel(gray2, cv2.CV_64F, 1, 1, ksize=3)
+                sobel1 = cv2.Sobel(gray1, cv2.CV_32F, 1, 1, ksize=3)
+                sobel2 = cv2.Sobel(gray2, cv2.CV_32F, 1, 1, ksize=3)
                 edge_diff = float(np.mean(np.abs(sobel1 - sobel2)))
                 edge_changes.append(edge_diff)
 
                 # Frame similarity (normalized cross-correlation without zero-variance warning)
-                std1 = float(np.std(gray1))
-                std2 = float(np.std(gray2))
+                sub_g1 = gray1[::2, ::2]
+                sub_g2 = gray2[::2, ::2]
+                std1 = float(np.std(sub_g1))
+                std2 = float(np.std(sub_g2))
                 if std1 < 1e-4 or std2 < 1e-4:
-                    norm_sim = 1.0 if float(np.mean(cv2.absdiff(gray1, gray2))) < 1.0 else 0.0
+                    norm_sim = 1.0 if float(np.mean(cv2.absdiff(sub_g1, sub_g2))) < 1.0 else 0.0
                 else:
-                    corr_matrix = np.corrcoef(gray1.ravel(), gray2.ravel())
+                    corr_matrix = np.corrcoef(sub_g1.ravel(), sub_g2.ravel())
                     norm_sim = float(corr_matrix[0, 1]) if not np.isnan(corr_matrix[0, 1]) else 1.0
                 similarities.append(norm_sim)
             except Exception:
