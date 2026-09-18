@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.4] - 2026-09-18
+
+### Added
+- **High-Speed Turbo Analysis**: Monotonic forward-pass frame extraction (`sample_scene_data`) eliminating redundant keyframe rewinds and duplicate seeks. Shared Farneback optical flow compute between Zoom/Pan and Image with Background detectors.
+- **Detector Computational Optimizations**: Switched Gaussian blur calculations to `float32` with cross-frame blur statistics caching in `StaticImageDetector`. Optimized motion detector edge detection and pair subsampling.
+- **Autopilot Batch Processing Queue**: Fully autonomous multi-video queue processing with live status cards, auto-export clean master video upon completion, "Review in Workspace" action to immediately load any analyzed batch video into the Studio Workspace, and on-demand export controls.
+
+---
+
 ## [1.0.3] - 2026-09-13
 
 ### Fixed

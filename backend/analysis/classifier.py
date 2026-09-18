@@ -1,5 +1,6 @@
 import time
 from typing import List, Dict, Any, Optional, Callable
+import cv2
 import numpy as np
 
 from ..video.ffprobe import probe_video
@@ -136,15 +137,32 @@ class VideoAnalysisPipeline:
                 return {"cancelled": True}
 
             s_duration = s_end - s_start
-            # Sample frames within this scene (3-8 frames depending on duration)
+            # Sample frames and fine pairs in a single forward pass (no duplicate seeks or keyframe rewinds)
             sample_count = max(3, min(10, int(s_duration * 3.0)))
-            frames = sampler.sample_range(s_start, s_end, count=sample_count)
+            frames, fine_pairs = sampler.sample_scene_data(
+                s_start, s_end,
+                count=sample_count,
+                pair_count=3,
+                dt=0.12
+            )
 
             if not frames:
                 continue
 
-            # Sample fine pairs (dt ~ 0.12s, 2-4 frames apart) for high-precision optical flow & affine tracking
-            fine_pairs = sampler.sample_fine_pairs(s_start, s_end, pair_count=3, dt=0.12)
+            # Precompute Farneback optical flow once for all fine pairs to share between Zoom & Background detectors
+            enriched_fine_pairs = []
+            for pair in fine_pairs:
+                g1, g2 = pair[2], pair[4]
+                if g1 is not None and g2 is not None and g1.shape == g2.shape and g1.size > 0:
+                    flow = cv2.calcOpticalFlowFarneback(
+                        g1, g2, None,
+                        pyr_scale=0.5, levels=3, winsize=15,
+                        iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+                    )
+                    enriched_fine_pairs.append((pair[0], pair[1], pair[2], pair[3], pair[4], flow))
+                else:
+                    enriched_fine_pairs.append(pair)
+            fine_pairs = enriched_fine_pairs
 
             # Save middle frame for duplicate detection and UI thumbnail
             mid_idx = len(frames) // 2

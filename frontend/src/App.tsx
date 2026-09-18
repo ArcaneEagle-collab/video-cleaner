@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Header } from "./components/Header";
 import { UploadZone } from "./components/UploadZone";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -80,6 +80,8 @@ export function App() {
   // Batch Items
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
+  const [autoExportBatch, setAutoExportBatch] = useState(true);
+  const batchPausedRef = useRef(false);
 
   // Initial mount lifecycle
   useEffect(() => {
@@ -311,9 +313,10 @@ export function App() {
   };
 
   // Add Files to Batch
-  const handleAddBatchFiles = async (files: FileList) => {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+  const handleAddBatchFiles = async (files: FileList | File[]) => {
+    const fileList = Array.from(files);
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
       const formData = new FormData();
       formData.append("file", file);
       try {
@@ -339,16 +342,30 @@ export function App() {
     }
   };
 
-  // Run Batch Processing
+  // Pause Batch Processing
+  const handlePauseBatch = () => {
+    batchPausedRef.current = true;
+    setIsProcessingBatch(false);
+  };
+
+  // Run Batch Processing on Autopilot
   const handleStartBatch = async () => {
+    batchPausedRef.current = false;
     setIsProcessingBatch(true);
-    for (const item of batchItems) {
-      if (item.status === "completed") continue;
-      // Update item to analyzing
+
+    for (let i = 0; i < batchItems.length; i++) {
+      if (batchPausedRef.current) break;
+
+      const item = batchItems[i];
+      if (item.status === "completed" || item.status === "exported") continue;
+
+      // Mark analyzing
       setBatchItems((prev) =>
-        prev.map((it) => (it.id === item.id ? { ...it, status: "analyzing", progress: 20 } : it))
+        prev.map((it) =>
+          it.id === item.id ? { ...it, status: "analyzing", progress: 5, stage: "Starting analysis..." } : it
+        )
       );
-      // Run analysis
+
       try {
         const res = await fetch(getApiEndpoint("/api/analyze"), {
           method: "POST",
@@ -357,19 +374,175 @@ export function App() {
             video_path: item.metadata.filepath,
             sensitivity: settings.sensitivity,
             min_clip_duration: settings.min_clip_duration,
+            min_clip_gap: settings.min_clip_gap,
+            detect_static: settings.detect_static,
+            detect_zoom_pan: settings.detect_zoom_pan,
+            detect_transitions: settings.detect_transitions,
+            detect_background: settings.detect_background,
+            detect_repeated: settings.detect_repeated,
+            detect_motion: settings.detect_motion,
+            ai_assisted: settings.ai_assisted,
           }),
         });
-        // Mock progression for batch queue demonstration
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to start analysis");
+        }
+
+        const startData = await res.json();
+        const taskId = startData.task_id;
+        if (!taskId) {
+          throw new Error("No task ID received from backend");
+        }
+
+        // Poll task status until complete or error
+        let analysisDone = false;
+        let finalResult: any = null;
+
+        while (!analysisDone && !batchPausedRef.current) {
+          await new Promise((r) => setTimeout(r, 600));
+          try {
+            const pollRes = await fetch(getApiEndpoint(`/api/status/${taskId}`));
+            if (pollRes.ok) {
+              const pollData = await pollRes.json();
+              if (pollData.status === "completed") {
+                analysisDone = true;
+                finalResult = pollData.result;
+              } else if (pollData.status === "error") {
+                throw new Error(pollData.error || "Analysis failed");
+              } else if (pollData.status === "cancelled") {
+                throw new Error("Analysis was cancelled");
+              }
+            }
+          } catch (pe) {
+            // Ignore brief polling blips
+          }
+        }
+
+        if (batchPausedRef.current) break;
+
+        if (finalResult && finalResult.segments) {
+          const segs: Segment[] = finalResult.segments;
+          const usableCount = segs.filter((s) => (s.user_override || s.action) === "KEEP").length;
+          const removedCount = segs.filter((s) => (s.user_override || s.action) === "REMOVE").length;
+          const itemStats = {
+            totalScenes: segs.length,
+            usableClips: usableCount,
+            removedSlides: removedCount,
+          };
+
+          // If auto-export enabled and usable clips exist, automatically export master video
+          if (autoExportBatch && usableCount > 0) {
+            setBatchItems((prev) =>
+              prev.map((it) =>
+                it.id === item.id
+                  ? {
+                      ...it,
+                      status: "exporting",
+                      progress: 90,
+                      stage: "Autopilot exporting clean master video...",
+                      segments: segs,
+                      stats: itemStats,
+                    }
+                  : it
+              )
+            );
+
+            try {
+              const exportRes = await fetch(getApiEndpoint("/api/export"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  video_path: item.metadata.filepath,
+                  segments: segs,
+                  export_combined: true,
+                  export_individual: false,
+                  quality: exportSettings.quality,
+                  include_audio: exportSettings.include_audio,
+                  codec: exportSettings.codec,
+                  padding_sec: exportSettings.padding_sec,
+                }),
+              });
+              const exportData = await exportRes.json();
+              setBatchItems((prev) =>
+                prev.map((it) =>
+                  it.id === item.id
+                    ? {
+                        ...it,
+                        status: "exported",
+                        progress: 100,
+                        stage: "Completed & Clean Master Exported",
+                        outputPath: exportData.combined_path,
+                        segments: segs,
+                        stats: itemStats,
+                      }
+                    : it
+                )
+              );
+            } catch (ee) {
+              setBatchItems((prev) =>
+                prev.map((it) =>
+                  it.id === item.id
+                    ? {
+                        ...it,
+                        status: "completed",
+                        progress: 100,
+                        stage: "Analysis Completed",
+                        segments: segs,
+                        stats: itemStats,
+                      }
+                    : it
+                )
+              );
+            }
+          } else {
+            setBatchItems((prev) =>
+              prev.map((it) =>
+                it.id === item.id
+                  ? {
+                      ...it,
+                      status: "completed",
+                      progress: 100,
+                      stage: "Analysis Completed",
+                      segments: segs,
+                      stats: itemStats,
+                    }
+                  : it
+              )
+            );
+          }
+        }
+      } catch (err: any) {
         setBatchItems((prev) =>
-          prev.map((it) => (it.id === item.id ? { ...it, status: "completed", progress: 100 } : it))
-        );
-      } catch (err) {
-        setBatchItems((prev) =>
-          prev.map((it) => (it.id === item.id ? { ...it, status: "error", progress: 0 } : it))
+          prev.map((it) => (it.id === item.id ? { ...it, status: "error", progress: 0, error: err.message } : it))
         );
       }
     }
+
     setIsProcessingBatch(false);
+  };
+
+  // Switch to Workspace to review this video
+  const handleReviewInWorkspace = (item: BatchItem) => {
+    setMetadata(item.metadata);
+    if (item.segments && item.segments.length > 0) {
+      setSegments(item.segments);
+      setActiveSegmentId(item.segments[0].id);
+      setWorkflowStep("review");
+    } else {
+      setWorkflowStep("import");
+    }
+    setActiveTab("workspace");
+  };
+
+  // Direct export trigger from batch queue
+  const handleExportBatchItem = (item: BatchItem) => {
+    setMetadata(item.metadata);
+    if (item.segments && item.segments.length > 0) {
+      setSegments(item.segments);
+    }
+    setIsExportModalOpen(true);
   };
 
   const activeSegment = useMemo(() => {
@@ -528,8 +701,13 @@ export function App() {
           batchItems={batchItems}
           setBatchItems={setBatchItems}
           onStartBatch={handleStartBatch}
+          onPauseBatch={handlePauseBatch}
           isProcessingBatch={isProcessingBatch}
           onAddFiles={handleAddBatchFiles}
+          autoExport={autoExportBatch}
+          setAutoExport={setAutoExportBatch}
+          onReviewInWorkspace={handleReviewInWorkspace}
+          onExportItem={handleExportBatchItem}
         />
       )}
 
