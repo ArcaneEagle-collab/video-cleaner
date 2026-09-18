@@ -15,9 +15,9 @@ def trim_blank_lead_in(
     cap: Optional[cv2.VideoCapture] = None
 ) -> float:
     """
-    Checks if the clip begins with solid black/blank frames (e.g. intro black screen)
-    and advances start_sec past them to the first visible frame.
-    Optionally reuses an open cv2.VideoCapture for fast batch processing.
+    Checks if the clip begins with solid black frames or motionless freeze-frames
+    (e.g. intro black screen, transition dissolve dips, or lingering still image pixels)
+    and advances start_sec past them to active organic video footage.
     """
     local_cap = None
     try:
@@ -34,12 +34,33 @@ def trim_blank_lead_in(
         active_cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         
         curr_frame = start_frame
-        max_frame = min(int(end_sec * fps) - 5, start_frame + int(max_trim_sec * fps))
+        max_frame = min(int(end_sec * fps) - 4, start_frame + int(max_trim_sec * fps))
         
+        prev_gray = None
         while curr_frame < max_frame:
             ret, frame = active_cap.read()
-            if not ret or frame.mean() > 4.0:
+            if not ret or frame is None:
                 break
+            
+            # Check 1: Solid black / dark dip frame
+            if frame.mean() <= 6.0:
+                curr_frame += 1
+                prev_gray = None
+                continue
+                
+            # Check 2: Pure dead still frame (lingering still image at seam)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if prev_gray is not None:
+                diff = float(np.mean(cv2.absdiff(gray, prev_gray)))
+                # If frame difference is near zero (< 0.45) at seam, it's a freeze frame from the removed slide
+                if diff < 0.45:
+                    curr_frame += 1
+                    prev_gray = gray
+                    continue
+                else:
+                    # Motion detected, valid footage reached
+                    break
+            prev_gray = gray
             curr_frame += 1
             
         if curr_frame > start_frame:
@@ -105,13 +126,13 @@ class VideoExporter:
         codec = export_settings.get("codec", "libx264")
 
         # CRF mapping: "Original" uses visually lossless CRF 16 with guaranteed frame accuracy
-        crf_map = {"Original": 16, "High": 18, "Medium": 23}
+        crf_map = {"Original": 16, "High": 18, "Medium": 21}
         crf = crf_map.get(quality, 18)
         reencode = True  # Always frame-accurate re-encode to prevent keyframe snapping
 
-        # Safety inset (~5-6 frames at 24-30fps) to eliminate any transition dissolve / blur / flash ghosting
+        # Safety inset (~8-10 frames at 24-30fps) to eliminate any transition dissolve / blur / flash ghosting
         # when bordering a segment not marked for KEEP
-        safety_inset = 0.22
+        safety_inset = 0.35
 
         # Sort segments chronologically
         sorted_segs = sorted(segments, key=lambda s: float(s.get("start", 0.0)))
@@ -134,7 +155,7 @@ class VideoExporter:
             next_is_discarded = (next_action != "KEEP")
 
             # Max safety inset for short clips: ensure the clip is never wiped out
-            max_inset = max(0.0, (dur - 0.1) / 2.0)
+            max_inset = max(0.0, (dur - 0.15) / 2.0)
             eff_start_inset = min(safety_inset, max_inset) if prev_is_discarded else 0.0
             eff_end_inset = min(safety_inset, max_inset) if next_is_discarded else 0.0
 
@@ -173,7 +194,9 @@ class VideoExporter:
                 "start": round(start_p, 3),
                 "end": round(end_p, 3),
                 "orig_start": orig_start,
-                "orig_end": orig_end
+                "orig_end": orig_end,
+                "prev_is_discarded": prev_is_discarded,
+                "next_is_discarded": next_is_discarded
             })
 
         if not keep_clips:
@@ -229,8 +252,8 @@ class VideoExporter:
                         "total_clips": total_clips
                     })
 
-                # Cleanly trim any intro solid black frames from clip start
-                if clip_info["orig_start"] < 0.5 or (c_start - clip_info["orig_start"] > 0.05):
+                # Cleanly trim any intro solid black frames or lingering still image freezes from clip start
+                if clip_info.get("prev_is_discarded") or clip_info["orig_start"] < 0.5 or (c_start - clip_info["orig_start"] > 0.05):
                     trimmed_start = trim_blank_lead_in(video_path, c_start, c_end, cap=cap)
                     if c_end - trimmed_start >= 0.08:
                         c_start = trimmed_start
@@ -247,7 +270,7 @@ class VideoExporter:
                     codec=codec,
                     crf=crf,
                     include_audio=include_audio,
-                    preset="veryfast"
+                    preset="fast"
                 )
 
                 clip_paths.append(str(clip_out))
@@ -286,10 +309,10 @@ class VideoExporter:
                 merge_clips(
                     clip_paths,
                     str(clean_out),
-                    reencode=True,
+                    reencode=False,
                     codec=codec,
                     crf=crf,
-                    preset="veryfast"
+                    preset="fast"
                 )
 
             if clean_out.exists():

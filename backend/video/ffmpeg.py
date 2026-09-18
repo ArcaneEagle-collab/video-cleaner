@@ -277,7 +277,8 @@ def cut_clip(
     
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    audio_flags = ["-c:a", "aac", "-b:a", "192k"] if include_audio else ["-an"]
+    audio_flags = ["-c:a", "aac", "-b:a", "256k"] if include_audio else ["-an"]
+    tune_flags = ["-tune", "film"] if codec == "libx264" else []
 
     # Two-stage seek: fast jump to keyframe 5s prior, then exact frame seek
     if start_sec > 5.0:
@@ -293,6 +294,7 @@ def cut_clip(
             "-c:v", codec,
             "-crf", str(crf),
             "-preset", preset,
+            *tune_flags,
             "-pix_fmt", "yuv420p",
             "-avoid_negative_ts", "make_zero",
             *audio_flags,
@@ -308,6 +310,7 @@ def cut_clip(
             "-c:v", codec,
             "-crf", str(crf),
             "-preset", preset,
+            *tune_flags,
             "-pix_fmt", "yuv420p",
             "-avoid_negative_ts", "make_zero",
             *audio_flags,

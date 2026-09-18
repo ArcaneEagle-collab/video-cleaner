@@ -1,5 +1,7 @@
+import os
 import time
-from typing import List, Dict, Any, Optional, Callable
+import concurrent.futures
+from typing import List, Dict, Any, Optional, Callable, Tuple
 import cv2
 import numpy as np
 
@@ -63,6 +65,101 @@ class VideoAnalysisPipeline:
         self.bg_detector = SimpleBackgroundDetector()
         self.motion_detector = MotionDetector()
         self.dup_detector = DuplicateDetector()
+
+    def _analyze_scene_detectors(
+        self,
+        idx: int,
+        s_start: float,
+        s_end: float,
+        frames: List[Tuple[float, np.ndarray, np.ndarray]],
+        fine_pairs: List[Any]
+    ) -> Tuple[Dict[str, Any], Tuple[int, float, np.ndarray]]:
+        s_duration = s_end - s_start
+        mid_idx = len(frames) // 2
+        rep_time, rep_bgr, rep_gray = frames[mid_idx]
+
+        # Detector 1: Static Image
+        static_res = {"confidence": 0.0, "is_static": False}
+        if self.detect_static:
+            try:
+                static_res = self.static_detector.analyze_frames(frames)
+            except Exception as e:
+                static_res = {"confidence": 0.0, "is_static": False, "error": str(e)}
+
+        # Early-Exit Optimization: If scene is a pure motionless still image (SSIM >= 0.98, pixel diff < 5.0),
+        # optical flow is mathematically guaranteed to be (0, 0). Skip expensive Farneback & affine estimation.
+        is_dead_still = (
+            static_res.get("is_static", False) and
+            static_res.get("confidence", 0) >= 0.98 and
+            static_res.get("max_pixel_diff", 99.0) < 5.0
+        )
+
+        if is_dead_still:
+            zoom_res = {"detected": False, "confidence": 0.0, "type": "NONE", "residual_error": 5.0, "scale_change": 1.0}
+            trans_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
+            bg_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
+            motion_res = {"motion_score": 0.0, "is_organic_motion": False, "local_motion_score": 0.0}
+        else:
+            # Precompute Farneback optical flow once for all fine pairs to share between Zoom & Background detectors
+            enriched_fine_pairs = []
+            for pair in fine_pairs:
+                g1, g2 = pair[2], pair[4]
+                if g1 is not None and g2 is not None and g1.shape == g2.shape and g1.size > 0:
+                    flow = cv2.calcOpticalFlowFarneback(
+                        g1, g2, None,
+                        pyr_scale=0.5, levels=3, winsize=15,
+                        iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+                    )
+                    enriched_fine_pairs.append((pair[0], pair[1], pair[2], pair[3], pair[4], flow))
+                else:
+                    enriched_fine_pairs.append(pair)
+            fine_pairs = enriched_fine_pairs
+
+            # Detector 2: Zoom / Pan / Ken Burns (fine-pair precision tracking)
+            zoom_res = {"detected": False, "confidence": 0.0, "type": "NONE", "residual_error": 5.0, "scale_change": 1.0}
+            if self.detect_zoom_pan:
+                try:
+                    zoom_res = self.zoom_detector.analyze_fine_pairs(fine_pairs) if fine_pairs else self.zoom_detector.analyze_frames(frames)
+                except Exception as e:
+                    zoom_res = {"detected": False, "confidence": 0.0, "type": "NONE", "residual_error": 5.0, "scale_change": 1.0, "error": str(e)}
+
+            # Detector 3: Transitions
+            trans_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
+            if self.detect_transitions:
+                try:
+                    trans_res = self.transition_detector.analyze_frames(frames, s_duration)
+                except Exception as e:
+                    trans_res = {"detected": False, "confidence": 0.0, "type": "NONE", "error": str(e)}
+
+            # Detector 4: Image With Background (cutouts, photo cards, top photo + bottom banner, blurred wings)
+            bg_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
+            if self.detect_background:
+                try:
+                    bg_res = self.bg_detector.analyze_fine_pairs(fine_pairs) if fine_pairs else self.bg_detector.analyze_frames(frames)
+                except Exception as e:
+                    bg_res = {"detected": False, "confidence": 0.0, "type": "NONE", "error": str(e)}
+
+            # Detector 5: Motion Analysis
+            motion_res = {"motion_score": 1.0, "is_organic_motion": True, "local_motion_score": 0.5}
+            if self.detect_motion:
+                try:
+                    motion_res = self.motion_detector.analyze_frames(frames)
+                except Exception as e:
+                    motion_res = {"motion_score": 1.0, "is_organic_motion": True, "local_motion_score": 0.5, "error": str(e)}
+
+        scene_dict = {
+            "scene_index": idx,
+            "start": round(s_start, 3),
+            "end": round(s_end, 3),
+            "duration": round(s_duration, 3),
+            "rep_time": round(rep_time, 3),
+            "static_res": static_res,
+            "zoom_res": zoom_res,
+            "trans_res": trans_res,
+            "bg_res": bg_res,
+            "motion_res": motion_res
+        }
+        return scene_dict, (idx, rep_time, rep_gray)
 
     def run(
         self,
@@ -131,111 +228,55 @@ class VideoAnalysisPipeline:
         likely_images_count = 0
         likely_usable_count = 0
 
-        for idx, (s_start, s_end) in enumerate(subdivided_scenes):
-            if cancel_check and cancel_check():
-                sampler.close()
-                return {"cancelled": True}
+        workers = min(6, os.cpu_count() or 4)
+        scene_futures = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            for idx, (s_start, s_end) in enumerate(subdivided_scenes):
+                if cancel_check and cancel_check():
+                    sampler.close()
+                    return {"cancelled": True}
 
-            s_duration = s_end - s_start
-            # Sample frames and fine pairs in a single forward pass (no duplicate seeks or keyframe rewinds)
-            sample_count = max(3, min(10, int(s_duration * 3.0)))
-            frames, fine_pairs = sampler.sample_scene_data(
-                s_start, s_end,
-                count=sample_count,
-                pair_count=3,
-                dt=0.12
-            )
+                s_duration = s_end - s_start
+                sample_count = max(3, min(10, int(s_duration * 3.0)))
+                frames, fine_pairs = sampler.sample_scene_data(
+                    s_start, s_end,
+                    count=sample_count,
+                    pair_count=3,
+                    dt=0.12
+                )
 
-            if not frames:
-                continue
+                if not frames:
+                    continue
 
-            # Precompute Farneback optical flow once for all fine pairs to share between Zoom & Background detectors
-            enriched_fine_pairs = []
-            for pair in fine_pairs:
-                g1, g2 = pair[2], pair[4]
-                if g1 is not None and g2 is not None and g1.shape == g2.shape and g1.size > 0:
-                    flow = cv2.calcOpticalFlowFarneback(
-                        g1, g2, None,
-                        pyr_scale=0.5, levels=3, winsize=15,
-                        iterations=3, poly_n=5, poly_sigma=1.2, flags=0
-                    )
-                    enriched_fine_pairs.append((pair[0], pair[1], pair[2], pair[3], pair[4], flow))
+                fut = executor.submit(self._analyze_scene_detectors, idx, s_start, s_end, frames, fine_pairs)
+                scene_futures.append(fut)
+
+            sampler.close()
+
+            for idx, fut in enumerate(scene_futures):
+                if cancel_check and cancel_check():
+                    return {"cancelled": True}
+
+                scene_res, rep_info = fut.result()
+                scene_results.append(scene_res)
+                representative_frames.append(rep_info)
+
+                static_res = scene_res["static_res"]
+                zoom_res = scene_res["zoom_res"]
+                bg_res = scene_res["bg_res"]
+                if static_res.get("confidence", 0) > 0.6 or zoom_res.get("confidence", 0) > 0.6 or bg_res.get("confidence", 0) > 0.6:
+                    likely_images_count += 1
                 else:
-                    enriched_fine_pairs.append(pair)
-            fine_pairs = enriched_fine_pairs
+                    likely_usable_count += 1
 
-            # Save middle frame for duplicate detection and UI thumbnail
-            mid_idx = len(frames) // 2
-            rep_time, rep_bgr, rep_gray = frames[mid_idx]
-            representative_frames.append((idx, rep_time, rep_gray))
-
-            # Detector 1: Static Image
-            static_res = {"confidence": 0.0, "is_static": False}
-            if self.detect_static:
-                try:
-                    static_res = self.static_detector.analyze_frames(frames)
-                except Exception as e:
-                    static_res = {"confidence": 0.0, "is_static": False, "error": str(e)}
-
-            # Detector 2: Zoom / Pan / Ken Burns (fine-pair precision tracking)
-            zoom_res = {"detected": False, "confidence": 0.0, "type": "NONE", "residual_error": 5.0, "scale_change": 1.0}
-            if self.detect_zoom_pan:
-                try:
-                    zoom_res = self.zoom_detector.analyze_fine_pairs(fine_pairs) if fine_pairs else self.zoom_detector.analyze_frames(frames)
-                except Exception as e:
-                    zoom_res = {"detected": False, "confidence": 0.0, "type": "NONE", "residual_error": 5.0, "scale_change": 1.0, "error": str(e)}
-
-            # Detector 3: Transitions
-            trans_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
-            if self.detect_transitions:
-                try:
-                    trans_res = self.transition_detector.analyze_frames(frames, s_duration)
-                except Exception as e:
-                    trans_res = {"detected": False, "confidence": 0.0, "type": "NONE", "error": str(e)}
-
-            # Detector 4: Image With Background (cutouts, photo cards, top photo + bottom banner, blurred wings)
-            bg_res = {"detected": False, "confidence": 0.0, "type": "NONE"}
-            if self.detect_background:
-                try:
-                    bg_res = self.bg_detector.analyze_fine_pairs(fine_pairs) if fine_pairs else self.bg_detector.analyze_frames(frames)
-                except Exception as e:
-                    bg_res = {"detected": False, "confidence": 0.0, "type": "NONE", "error": str(e)}
-
-            # Detector 5: Motion Analysis
-            motion_res = {"motion_score": 1.0, "is_organic_motion": True, "local_motion_score": 0.5}
-            if self.detect_motion:
-                try:
-                    motion_res = self.motion_detector.analyze_frames(frames)
-                except Exception as e:
-                    motion_res = {"motion_score": 1.0, "is_organic_motion": True, "local_motion_score": 0.5, "error": str(e)}
-
-            scene_results.append({
-                "scene_index": idx,
-                "start": round(s_start, 3),
-                "end": round(s_end, 3),
-                "duration": round(s_duration, 3),
-                "rep_time": round(rep_time, 3),
-                "static_res": static_res,
-                "zoom_res": zoom_res,
-                "trans_res": trans_res,
-                "bg_res": bg_res,
-                "motion_res": motion_res
-            })
-
-            # Intermediate progress
-            pct = 20.0 + (idx + 1) / total_scenes * 60.0
-            if static_res.get("confidence", 0) > 0.6 or zoom_res.get("confidence", 0) > 0.6 or bg_res.get("confidence", 0) > 0.6:
-                likely_images_count += 1
-            else:
-                likely_usable_count += 1
-
-            report(
-                "Analyzing detectors",
-                pct,
-                scenes_detected=total_scenes,
-                likely_images=likely_images_count,
-                likely_usable=likely_usable_count
-            )
+                pct = 20.0 + (idx + 1) / total_scenes * 60.0
+                report(
+                    "Analyzing detectors (turbo multi-core)",
+                    pct,
+                    scenes_detected=total_scenes,
+                    likely_images=likely_images_count,
+                    likely_usable=likely_usable_count
+                )
 
         sampler.close()
 
