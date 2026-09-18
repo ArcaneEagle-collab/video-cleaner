@@ -100,11 +100,13 @@ class MotionDetector:
                 sub_g2 = gray2[::2, ::2]
                 std1 = float(np.std(sub_g1))
                 std2 = float(np.std(sub_g2))
-                if std1 < 1e-4 or std2 < 1e-4:
+                if std1 < 1e-3 or std2 < 1e-3:
                     norm_sim = 1.0 if float(np.mean(cv2.absdiff(sub_g1, sub_g2))) < 1.0 else 0.0
                 else:
-                    corr_matrix = np.corrcoef(sub_g1.ravel(), sub_g2.ravel())
-                    norm_sim = float(corr_matrix[0, 1]) if not np.isnan(corr_matrix[0, 1]) else 1.0
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        corr_matrix = np.corrcoef(sub_g1.ravel(), sub_g2.ravel())
+                        val = corr_matrix[0, 1]
+                        norm_sim = float(val) if not np.isnan(val) else 1.0
                 similarities.append(norm_sim)
             except Exception:
                 continue

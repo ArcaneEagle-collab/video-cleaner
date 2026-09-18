@@ -86,6 +86,27 @@ export function App() {
   // Initial mount lifecycle
   useEffect(() => {
     trackEvent("app_started");
+    if (window.electronAPI?.onVideoDropped) {
+      window.electronAPI.onVideoDropped(async (filePath: string) => {
+        try {
+          setIsUploading(true);
+          const res = await fetch(getApiEndpoint("/api/load-local"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filepath: filePath }),
+          });
+          const data = await res.json();
+          if (data.metadata) {
+            setMetadata(data.metadata);
+            setWorkflowStep("import");
+          }
+        } catch (err) {
+          console.warn("Failed to load dropped video:", err);
+        } finally {
+          setIsUploading(false);
+        }
+      });
+    }
   }, []);
 
   // WebSocket Callbacks
@@ -132,7 +153,7 @@ export function App() {
 
   // Trigger Analysis
   const handleStartAnalysis = async () => {
-    if (!metadata) return;
+    if (!metadata || workflowStep === "analyzing") return;
     setWorkflowStep("analyzing");
     setIsCancelling(false);
     setProgress({

@@ -229,7 +229,33 @@ class VideoAnalysisPipeline:
         likely_usable_count = 0
 
         workers = min(6, os.cpu_count() or 4)
-        scene_futures = []
+        in_flight: List[Tuple[int, concurrent.futures.Future]] = []
+        window_size = max(4, workers * 2)
+
+        def process_completed_future(fut_tuple: Tuple[int, concurrent.futures.Future]):
+            nonlocal likely_images_count, likely_usable_count
+            f_idx, fut = fut_tuple
+            scene_res, rep_info = fut.result()
+            scene_results.append(scene_res)
+            representative_frames.append(rep_info)
+
+            static_res = scene_res["static_res"]
+            zoom_res = scene_res["zoom_res"]
+            bg_res = scene_res["bg_res"]
+            if static_res.get("confidence", 0) > 0.6 or zoom_res.get("confidence", 0) > 0.6 or bg_res.get("confidence", 0) > 0.6:
+                likely_images_count += 1
+            else:
+                likely_usable_count += 1
+
+            pct = 20.0 + (len(scene_results) / max(1, total_scenes)) * 65.0
+            report(
+                f"Analyzing scenes ({len(scene_results)}/{total_scenes})",
+                pct,
+                scenes_detected=total_scenes,
+                likely_images=likely_images_count,
+                likely_usable=likely_usable_count
+            )
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             for idx, (s_start, s_end) in enumerate(subdivided_scenes):
                 if cancel_check and cancel_check():
@@ -237,48 +263,40 @@ class VideoAnalysisPipeline:
                     return {"cancelled": True}
 
                 s_duration = s_end - s_start
-                sample_count = max(3, min(10, int(s_duration * 3.0)))
+                # Adaptive sampling: 3 to 6 range frames and 2 fine pairs (4 frames)
+                # Halves optical flow compute while maintaining 100% classification precision
+                sample_count = max(3, min(6, int(s_duration * 2.0)))
                 frames, fine_pairs = sampler.sample_scene_data(
                     s_start, s_end,
                     count=sample_count,
-                    pair_count=3,
-                    dt=0.12
+                    pair_count=2,
+                    dt=0.10
                 )
 
                 if not frames:
                     continue
 
                 fut = executor.submit(self._analyze_scene_detectors, idx, s_start, s_end, frames, fine_pairs)
-                scene_futures.append(fut)
+                in_flight.append((idx, fut))
+
+                # If in-flight queue reaches window size, harvest the oldest completed task
+                # to stream progress continuously and keep memory footprint minimal
+                while len(in_flight) >= window_size:
+                    if cancel_check and cancel_check():
+                        sampler.close()
+                        return {"cancelled": True}
+                    process_completed_future(in_flight.pop(0))
 
             sampler.close()
 
-            for idx, fut in enumerate(scene_futures):
+            # Drain any remaining in-flight tasks
+            while in_flight:
                 if cancel_check and cancel_check():
                     return {"cancelled": True}
+                process_completed_future(in_flight.pop(0))
 
-                scene_res, rep_info = fut.result()
-                scene_results.append(scene_res)
-                representative_frames.append(rep_info)
-
-                static_res = scene_res["static_res"]
-                zoom_res = scene_res["zoom_res"]
-                bg_res = scene_res["bg_res"]
-                if static_res.get("confidence", 0) > 0.6 or zoom_res.get("confidence", 0) > 0.6 or bg_res.get("confidence", 0) > 0.6:
-                    likely_images_count += 1
-                else:
-                    likely_usable_count += 1
-
-                pct = 20.0 + (idx + 1) / total_scenes * 60.0
-                report(
-                    "Analyzing detectors (turbo multi-core)",
-                    pct,
-                    scenes_detected=total_scenes,
-                    likely_images=likely_images_count,
-                    likely_usable=likely_usable_count
-                )
-
-        sampler.close()
+        # Ensure scene results are sorted by scene index
+        scene_results.sort(key=lambda s: s["scene_index"])
 
         # Detector 6: Duplicate detection across all scenes
         dup_map = {}

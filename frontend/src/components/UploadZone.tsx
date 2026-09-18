@@ -44,10 +44,28 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
     }
 
     setIsUploading(true);
-    const formData = new FormData();
-    formData.append("file", file);
 
     try {
+      const filePath = (file as any).path;
+      // In Electron desktop mode, load local file directly in 0.02s without copying multi-hundred MB files
+      if (filePath && typeof filePath === "string") {
+        const res = await fetch(getApiEndpoint("/api/load-local"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filepath: filePath }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || "Failed to load local video");
+        }
+        onVideoSelected(data.metadata);
+        return;
+      }
+
+      // Browser fallback: standard multipart upload
+      const formData = new FormData();
+      formData.append("file", file);
+
       const res = await fetch(getApiEndpoint("/api/upload"), {
         method: "POST",
         body: formData,

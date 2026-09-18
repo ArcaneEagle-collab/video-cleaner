@@ -31,6 +31,11 @@ OUTPUTS_DIR = Path("outputs")
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
+@app.on_event("startup")
+async def on_startup():
+    import asyncio
+    ws_manager.set_main_loop(asyncio.get_running_loop())
+
 # WebSocket endpoint for real-time progress and live updates
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

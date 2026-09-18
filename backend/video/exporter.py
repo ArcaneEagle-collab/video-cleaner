@@ -2,6 +2,7 @@ import os
 import json
 import shutil
 import cv2
+import concurrent.futures
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Callable
 from .ffmpeg import cut_clip, merge_clips
@@ -227,67 +228,78 @@ class VideoExporter:
                 "merged_intervals": [[c["start"], c["end"]] for c in keep_clips]
             }, f, indent=2)
 
-        individual_clips = []
-        clip_paths = []
-
-        # Open video capture once for fast blank lead-in detection
+        # Pre-trim blank lead-in frames sequentially using single capture stream
         cap = None
         try:
             cap = cv2.VideoCapture(video_path)
-        except Exception:
-            cap = None
-
-        try:
-            # Extract individual clips
-            for idx, clip_info in enumerate(keep_clips, 1):
+            for clip_info in keep_clips:
                 c_start = clip_info["start"]
                 c_end = clip_info["end"]
-
-                if progress_callback:
-                    pct = int(5 + ((idx - 1) / max(1, total_clips)) * 80)
-                    progress_callback({
-                        "stage": f"Extracting clip {idx} of {total_clips}...",
-                        "percent": pct,
-                        "current_clip": idx,
-                        "total_clips": total_clips
-                    })
-
-                # Cleanly trim any intro solid black frames or lingering still image freezes from clip start
                 if clip_info.get("prev_is_discarded") or clip_info["orig_start"] < 0.5 or (c_start - clip_info["orig_start"] > 0.05):
                     trimmed_start = trim_blank_lead_in(video_path, c_start, c_end, cap=cap)
                     if c_end - trimmed_start >= 0.08:
-                        c_start = trimmed_start
-
-                clip_name = f"{source_name}_clip_{idx:03d}.mp4"
-                clip_out = project_dir / clip_name
-                
-                cut_clip(
-                    input_path=video_path,
-                    output_path=str(clip_out),
-                    start_sec=c_start,
-                    end_sec=c_end,
-                    reencode=reencode,
-                    codec=codec,
-                    crf=crf,
-                    include_audio=include_audio,
-                    preset="fast"
-                )
-
-                clip_paths.append(str(clip_out))
-                individual_clips.append({
-                    "clip_index": idx,
-                    "segment_id": clip_info["segment"].get("id", f"seg_{idx:03d}"),
-                    "filename": clip_name,
-                    "filepath": str(clip_out.resolve()),
-                    "relative_path": f"outputs/{project_dir.name}/{clip_name}",
-                    "start": round(c_start, 3),
-                    "end": round(c_end, 3),
-                    "duration": round(c_end - c_start, 3),
-                    "size_mb": round(clip_out.stat().st_size / (1024 * 1024), 2)
-                })
+                        clip_info["start"] = trimmed_start
+        except Exception:
+            pass
         finally:
             if cap is not None and cap.isOpened():
                 cap.release()
+
+        # Worker function for parallel clip extraction
+        def cut_single_clip(task_args: Tuple[int, Dict[str, Any]]) -> Dict[str, Any]:
+            idx, clip_info = task_args
+            c_start = clip_info["start"]
+            c_end = clip_info["end"]
+            clip_name = f"{source_name}_clip_{idx:03d}.mp4"
+            clip_out = project_dir / clip_name
+
+            cut_clip(
+                input_path=video_path,
+                output_path=str(clip_out),
+                start_sec=c_start,
+                end_sec=c_end,
+                reencode=reencode,
+                codec=codec,
+                crf=crf,
+                include_audio=include_audio,
+                preset="fast"
+            )
+
+            return {
+                "clip_index": idx,
+                "segment_id": clip_info["segment"].get("id", f"seg_{idx:03d}"),
+                "filename": clip_name,
+                "filepath": str(clip_out.resolve()),
+                "relative_path": f"outputs/{project_dir.name}/{clip_name}",
+                "start": round(c_start, 3),
+                "end": round(c_end, 3),
+                "duration": round(c_end - c_start, 3),
+                "size_mb": round(clip_out.stat().st_size / (1024 * 1024), 2) if clip_out.exists() else 0.0
+            }
+
+        cut_workers = min(4, os.cpu_count() or 2)
+        tasks = list(enumerate(keep_clips, 1))
+        individual_clips = []
+        completed_count = 0
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=cut_workers) as executor:
+            future_to_task = {executor.submit(cut_single_clip, t): t for t in tasks}
+            for fut in concurrent.futures.as_completed(future_to_task):
+                clip_data = fut.result()
+                individual_clips.append(clip_data)
+                completed_count += 1
+                if progress_callback:
+                    pct = int(5 + (completed_count / max(1, total_clips)) * 80)
+                    progress_callback({
+                        "stage": f"Extracting clips ({completed_count}/{total_clips})...",
+                        "percent": pct,
+                        "current_clip": completed_count,
+                        "total_clips": total_clips
+                    })
+
+        # Ensure exact chronological order
+        individual_clips.sort(key=lambda c: c["clip_index"])
+        clip_paths = [c["filepath"] for c in individual_clips]
 
         combined_video_info = None
         if export_combined and clip_paths:
