@@ -56,6 +56,11 @@ def main():
 
     try:
         # Import backend app
+        import asyncio
+        if sys.platform == "win32":
+            # Use SelectorEventLoop on Windows to completely eliminate Proactor pipe/socket write assertion errors
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
         from backend.main import app
         import uvicorn
 

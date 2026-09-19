@@ -205,7 +205,27 @@ class VideoAnalysisPipeline:
         # Stage 1: Scene Detection
         # ----------------------------------------------------------------------
         report("Scene detection", 10.0, scenes_detected=0, likely_images=0, likely_usable=0)
-        raw_scenes = detect_scenes(video_path, min_scene_len_sec=0.35, threshold=self.scene_threshold)
+
+        def scene_progress(pct: float, cur_sec: float, scenes_count: int):
+            report(
+                f"Scene detection ({scenes_count} scenes found)",
+                pct,
+                timestamp=round(cur_sec, 1),
+                scenes_detected=scenes_count,
+                likely_images=0,
+                likely_usable=0
+            )
+
+        try:
+            raw_scenes = detect_scenes(
+                video_path,
+                min_scene_len_sec=0.35,
+                threshold=self.scene_threshold,
+                progress_callback=scene_progress,
+                cancel_check=cancel_check
+            )
+        except InterruptedError:
+            return {"cancelled": True}
 
         if cancel_check and cancel_check():
             return {"cancelled": True}
