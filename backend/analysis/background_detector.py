@@ -137,29 +137,41 @@ class ImageWithBackgroundDetector:
         # 5. Split-screen / Center Dividing Line Check
         # -------------------------------------------------------------
         sobel_x = np.abs(cv2.Sobel(g1, cv2.CV_32F, 1, 0, ksize=3))
-        col_profile = np.mean(sobel_x, axis=0)
-        center_col_band = col_profile[int(w * 0.46):int(w * 0.54)]
-        mid_split_peak = float(np.max(center_col_band)) / max(1.0, float(np.mean(col_profile)))
+        c1 = int(w * 0.46)
+        c2 = max(c1 + 1, int(w * 0.54))
+        center_col_band = col_profile[c1:c2]
+        if center_col_band.size > 0:
+            mid_split_peak = float(np.max(center_col_band)) / max(1.0, float(np.mean(col_profile)))
+        else:
+            mid_split_peak = 1.0
 
-        center_slice = sobel_x[:, int(w * 0.46):int(w * 0.54)]
-        col_sums = np.sum(center_slice, axis=0)
-        best_col_idx = np.argmax(col_sums)
-        best_col = center_slice[:, best_col_idx]
-        split_continuity = float(np.mean(best_col > 35.0))
+        center_slice = sobel_x[:, c1:c2]
+        if center_slice.shape[1] > 0:
+            col_sums = np.sum(center_slice, axis=0)
+            best_col_idx = int(np.argmax(col_sums))
+            best_col = center_slice[:, best_col_idx]
+            split_continuity = float(np.mean(best_col > 35.0))
+        else:
+            split_continuity = 0.0
 
-        left_half_zero = float(np.mean(mag[:, :w // 2] < 0.25))
-        right_half_zero = float(np.mean(mag[:, w // 2:] < 0.25))
-        left_half_mag = float(np.mean(mag[:, :w // 2]))
-        right_half_mag = float(np.mean(mag[:, w // 2:]))
+        mid_w = max(1, w // 2)
+        left_half_zero = float(np.mean(mag[:, :mid_w] < 0.25))
+        right_half_zero = float(np.mean(mag[:, mid_w:] < 0.25))
+        left_half_mag = float(np.mean(mag[:, :mid_w]))
+        right_half_mag = float(np.mean(mag[:, mid_w:]))
 
         # -------------------------------------------------------------
         # 6. Blurred Duplicate Background (Wings / Bokeh Pillarbox)
         # -------------------------------------------------------------
-        left_w = int(w * 0.20)
-        right_w = int(w * 0.80)
-        cen_lap = float(cv2.Laplacian(g1[:, left_w:right_w], cv2.CV_32F).var())
-        wings_lap = float((cv2.Laplacian(g1[:, :left_w], cv2.CV_32F).var() + cv2.Laplacian(g1[:, right_w:], cv2.CV_32F).var()) / 2.0)
-        wings_color_var = float((np.mean(np.var(f1_bgr[:, :left_w], axis=(0, 1))) + np.mean(np.var(f1_bgr[:, right_w:], axis=(0, 1)))) / 2.0)
+        left_w = max(1, int(w * 0.20))
+        right_w = min(w - 1, max(left_w + 1, int(w * 0.80)))
+        cen_lap = float(cv2.Laplacian(g1[:, left_w:right_w], cv2.CV_32F).var()) if (right_w > left_w) else 50.0
+        w_l = cv2.Laplacian(g1[:, :left_w], cv2.CV_32F).var() if left_w > 0 else 50.0
+        w_r = cv2.Laplacian(g1[:, right_w:], cv2.CV_32F).var() if (w - right_w) > 0 else 50.0
+        wings_lap = float((w_l + w_r) / 2.0)
+        v_l = np.mean(np.var(f1_bgr[:, :left_w], axis=(0, 1))) if left_w > 0 else 0.0
+        v_r = np.mean(np.var(f1_bgr[:, right_w:], axis=(0, 1))) if (w - right_w) > 0 else 0.0
+        wings_color_var = float((v_l + v_r) / 2.0)
 
         return {
             "top_b": top_b, "bot_b": bot_b, "left_b": left_b, "right_b": right_b,

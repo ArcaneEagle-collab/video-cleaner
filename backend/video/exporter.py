@@ -262,7 +262,7 @@ class VideoExporter:
                 codec=codec,
                 crf=crf,
                 include_audio=include_audio,
-                preset="fast"
+                preset="veryfast"
             )
 
             return {
@@ -324,7 +324,7 @@ class VideoExporter:
                     reencode=False,
                     codec=codec,
                     crf=crf,
-                    preset="fast"
+                    preset="veryfast"
                 )
 
             if clean_out.exists():

@@ -46,8 +46,8 @@ class VideoFrameSampler:
         else:
             target_idx = max(0, target_idx)
 
-        # If target is behind current pos or too far ahead (> 45 frames), do a seek
-        if self.current_frame_pos < 0 or target_idx < self.current_frame_pos or (target_idx - self.current_frame_pos) > 45:
+        # If target is behind current pos or too far ahead (> 90 frames), do a seek
+        if self.current_frame_pos < 0 or target_idx < self.current_frame_pos or (target_idx - self.current_frame_pos) > 90:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
             self.current_frame_pos = target_idx
 
