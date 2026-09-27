@@ -293,9 +293,9 @@ class VideoAnalysisPipeline:
                     return {"cancelled": True}
 
                 s_duration = s_end - s_start
-                # Adaptive sampling: 3 to 5 range frames and 1 to 2 fine pairs
-                sample_count = max(3, min(5, int(s_duration * 1.5)))
-                pair_count = 1 if s_duration <= 2.5 else 2
+                # High-speed sampling: 3 keyframes (start, mid, end) and 1 fine pair at midpoint
+                sample_count = 3 if s_duration <= 5.0 else 4
+                pair_count = 1
                 frames, fine_pairs = sampler.sample_scene_data(
                     s_start, s_end,
                     count=sample_count,

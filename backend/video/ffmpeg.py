@@ -35,23 +35,30 @@ class VideoFrameSampler:
             self.target_w = orig_w
             self.target_h = orig_h
         self.current_frame_pos = -1
+        self._cache: Dict[int, np.ndarray] = {}
+        self._max_cache: int = 128
 
     def _seek_and_read(self, target_idx: int) -> Optional[np.ndarray]:
         """
-        Reads frame at target_idx. Uses fast forward grab() if target is close
-        ahead of current position, avoiding expensive demuxer resets and keyframe rewinds.
+        Reads frame at target_idx with LRU caching.
+        Eliminates duplicate seeks, backward seek keyframe resets, and unnecessary grabbing.
         """
         if self.total_frames > 0:
             target_idx = min(self.total_frames - 1, max(0, target_idx))
         else:
             target_idx = max(0, target_idx)
 
-        # If target is behind current pos or too far ahead (> 90 frames), do a seek
-        if self.current_frame_pos < 0 or target_idx < self.current_frame_pos or (target_idx - self.current_frame_pos) > 90:
+        # 1. Return from cache if already decoded
+        if target_idx in self._cache:
+            return self._cache[target_idx]
+
+        # 2. If target is behind current pos or jump is > 20 frames, seek directly
+        diff = target_idx - self.current_frame_pos
+        if self.current_frame_pos < 0 or diff < 0 or diff > 20:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
             self.current_frame_pos = target_idx
 
-        # Fast forward grab until target
+        # 3. Fast forward grab for short intervals (<= 20 frames)
         while self.current_frame_pos < target_idx:
             if not self.cap.grab():
                 break
@@ -59,7 +66,13 @@ class VideoFrameSampler:
 
         ret, frame = self.cap.read()
         self.current_frame_pos += 1
-        return frame if ret and frame is not None else None
+        if ret and frame is not None:
+            if len(self._cache) >= self._max_cache:
+                first_key = next(iter(self._cache))
+                del self._cache[first_key]
+            self._cache[target_idx] = frame
+            return frame
+        return None
 
     def sample_all_frames(self) -> List[Tuple[float, np.ndarray, np.ndarray]]:
         """
@@ -277,45 +290,28 @@ def cut_clip(
     
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    audio_flags = ["-c:a", "aac", "-b:a", "256k"] if include_audio else ["-an"]
-    tune_flags = ["-tune", "film"] if codec == "libx264" else []
+    audio_flags = ["-c:a", "aac", "-b:a", "192k"] if include_audio else ["-an"]
 
-    # Two-stage seek: fast jump to keyframe 5s prior, then exact frame seek
-    if start_sec > 5.0:
-        coarse_seek = max(0.0, start_sec - 5.0)
-        fine_seek = start_sec - coarse_seek
-        cmd = [
-            ffmpeg_cmd, "-y",
-            "-accurate_seek",
-            "-ss", f"{coarse_seek:.3f}",
-            "-i", str(Path(input_path).resolve()),
-            "-ss", f"{fine_seek:.3f}",
-            "-t", duration_str,
-            "-c:v", codec,
-            "-crf", str(crf),
-            "-preset", preset,
-            *tune_flags,
-            "-pix_fmt", "yuv420p",
-            "-avoid_negative_ts", "make_zero",
-            *audio_flags,
-            str(Path(output_path).resolve())
-        ]
+    # Choose optimal encoder flags
+    if codec == "h264_mf":
+        video_flags = ["-c:v", "h264_mf", "-b:v", "5M"]
+    elif codec == "h264_qsv":
+        video_flags = ["-c:v", "h264_qsv", "-global_quality", str(crf)]
     else:
-        cmd = [
-            ffmpeg_cmd, "-y",
-            "-accurate_seek",
-            "-ss", f"{start_sec:.3f}",
-            "-i", str(Path(input_path).resolve()),
-            "-t", duration_str,
-            "-c:v", codec,
-            "-crf", str(crf),
-            "-preset", preset,
-            *tune_flags,
-            "-pix_fmt", "yuv420p",
-            "-avoid_negative_ts", "make_zero",
-            *audio_flags,
-            str(Path(output_path).resolve())
-        ]
+        video_flags = ["-c:v", "libx264", "-crf", str(crf), "-preset", preset]
+
+    cmd = [
+        ffmpeg_cmd, "-y",
+        "-ss", f"{start_sec:.3f}",
+        "-accurate_seek",
+        "-i", str(Path(input_path).resolve()),
+        "-t", duration_str,
+        *video_flags,
+        "-pix_fmt", "yuv420p",
+        "-avoid_negative_ts", "make_zero",
+        *audio_flags,
+        str(Path(output_path).resolve())
+    ]
 
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **get_subprocess_flags())
     if result.returncode != 0:

@@ -97,17 +97,29 @@ class StaticImageDetector:
                     prev_stats, prev_dhash, prev_hist = None, None, None
                     continue
 
-                # 1. SSIM (reusing Gaussian statistics of shared frame)
-                ssim_val, _, next_stats = compute_ssim_approx(gray1, gray2, stats1=prev_stats)
-                prev_stats = next_stats
-                ssim_scores.append(ssim_val)
-
-                # 2. Mean and max absolute pixel difference
+                # 1. Mean and max absolute pixel difference (fast 0.2ms check)
                 abs_diff = cv2.absdiff(gray1, gray2)
                 mean_diff = float(np.mean(abs_diff))
                 curr_max_diff = float(np.max(abs_diff))
                 pixel_diffs.append(mean_diff)
                 max_diffs.append(curr_max_diff)
+
+                # Early-exit optimization: If mean pixel difference > 12.0, frames have obvious
+                # natural motion or scene changes. Skip expensive 3-pass Gaussian blur SSIM,
+                # 2D HSV histogram generation, and dHash computation.
+                if mean_diff > 12.0:
+                    ssim_val = max(0.15, float(1.0 - mean_diff / 55.0))
+                    ssim_scores.append(ssim_val)
+                    noise_variances.append(float(np.std(abs_diff)))
+                    dhash_diffs.append(15)
+                    hist_corrs.append(0.65)
+                    prev_stats, prev_dhash, prev_hist = None, None, None
+                    continue
+
+                # 2. SSIM (reusing Gaussian statistics of shared frame for potential stills)
+                ssim_val, _, next_stats = compute_ssim_approx(gray1, gray2, stats1=prev_stats)
+                prev_stats = next_stats
+                ssim_scores.append(ssim_val)
 
                 # 3. Temporal sensor noise in smooth regions
                 flat_mask = abs_diff < 10

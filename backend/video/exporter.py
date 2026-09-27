@@ -137,50 +137,83 @@ class VideoExporter:
 
         # Sort segments chronologically
         sorted_segs = sorted(segments, key=lambda s: float(s.get("start", 0.0)))
-        keep_clips: List[Dict[str, Any]] = []
+        # 1. Merge contiguous KEEP segments into unified continuous scenes
+        merged_keep_blocks: List[Dict[str, Any]] = []
+        current_block: Optional[Dict[str, Any]] = None
 
         for idx, seg in enumerate(sorted_segs):
             effective_action = seg.get("user_override") or seg.get("action")
             if effective_action != "KEEP":
+                if current_block is not None:
+                    merged_keep_blocks.append(current_block)
+                    current_block = None
                 continue
 
-            orig_start = float(seg["start"])
-            orig_end = float(seg["end"])
+            s_start = float(seg["start"])
+            s_end = float(seg["end"])
+
+            if current_block is None:
+                prev_action = (sorted_segs[idx - 1].get("user_override") or sorted_segs[idx - 1].get("action")) if idx > 0 else None
+                current_block = {
+                    "orig_start": s_start,
+                    "orig_end": s_end,
+                    "segments": [seg],
+                    "prev_is_discarded": (prev_action != "KEEP"),
+                    "next_is_discarded": True,
+                    "primary_segment": seg
+                }
+            else:
+                # If adjacent or overlapping within 0.15s, merge into continuous scene
+                if abs(s_start - current_block["orig_end"]) <= 0.15:
+                    current_block["orig_end"] = max(current_block["orig_end"], s_end)
+                    current_block["segments"].append(seg)
+                else:
+                    merged_keep_blocks.append(current_block)
+                    current_block = {
+                        "orig_start": s_start,
+                        "orig_end": s_end,
+                        "segments": [seg],
+                        "prev_is_discarded": True,
+                        "next_is_discarded": True,
+                        "primary_segment": seg
+                    }
+
+        if current_block is not None:
+            merged_keep_blocks.append(current_block)
+
+        # Update next_is_discarded based on whether next block follows immediately
+        for i in range(len(merged_keep_blocks)):
+            if i < len(merged_keep_blocks) - 1:
+                gap = merged_keep_blocks[i + 1]["orig_start"] - merged_keep_blocks[i]["orig_end"]
+                merged_keep_blocks[i]["next_is_discarded"] = (gap > 0.15)
+            else:
+                merged_keep_blocks[i]["next_is_discarded"] = True
+
+        keep_clips: List[Dict[str, Any]] = []
+        for block in merged_keep_blocks:
+            orig_start = block["orig_start"]
+            orig_end = block["orig_end"]
             dur = orig_end - orig_start
-
-            # Check if adjacent to discarded (non-KEEP) segments or video extremities
-            prev_action = (sorted_segs[idx - 1].get("user_override") or sorted_segs[idx - 1].get("action")) if idx > 0 else None
-            next_action = (sorted_segs[idx + 1].get("user_override") or sorted_segs[idx + 1].get("action")) if (idx < len(sorted_segs) - 1) else None
-
-            prev_is_discarded = (prev_action != "KEEP")
-            next_is_discarded = (next_action != "KEEP")
+            prev_is_discarded = block["prev_is_discarded"]
+            next_is_discarded = block["next_is_discarded"]
 
             # Max safety inset for short clips: ensure the clip is never wiped out
             max_inset = max(0.0, (dur - 0.15) / 2.0)
             eff_start_inset = min(safety_inset, max_inset) if prev_is_discarded else 0.0
             eff_end_inset = min(safety_inset, max_inset) if next_is_discarded else 0.0
 
-            # Calculate safe start boundary
+            # Calculate safe boundaries
             if prev_is_discarded:
-                # Bordering a removed image/transition: apply safety inset inward into valid video; NEVER pad backwards
                 start_p = orig_start + eff_start_inset
             else:
-                # Safe boundary with another KEEP clip: allow user padding up to preceding boundary
                 start_p = max(0.0, orig_start - padding)
-                if idx > 0:
-                    start_p = max(start_p, float(sorted_segs[idx - 1]["end"]))
 
-            # Calculate safe end boundary
             if next_is_discarded:
-                # Bordering a removed image/transition: apply safety inset inward into valid video; NEVER pad forwards
                 end_p = orig_end - eff_end_inset
             else:
-                # Safe boundary with another KEEP clip: allow user padding up to succeeding boundary
                 end_p = orig_end + padding
                 if total_duration > 0:
                     end_p = min(total_duration, end_p)
-                if idx < len(sorted_segs) - 1:
-                    end_p = min(end_p, float(sorted_segs[idx + 1]["start"]))
 
             # Ensure minimum viable duration of at least 0.08s and end_p > start_p
             if end_p - start_p < 0.08:
@@ -191,7 +224,7 @@ class VideoExporter:
                     end_p = max(start_p + 0.08, end_p)
 
             keep_clips.append({
-                "segment": seg,
+                "segment": block["primary_segment"],
                 "start": round(start_p, 3),
                 "end": round(end_p, 3),
                 "orig_start": orig_start,

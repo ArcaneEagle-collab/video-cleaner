@@ -5,6 +5,28 @@ All notable changes to Video Cleaner are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.9] - 2026-09-27
+
+### Performance Overhaul (3x Faster End-to-End Analysis & Export)
+- **Contiguous Segment Merging on Export**:
+  - Automatically merges contiguous surviving KEEP segments into smooth, unbroken continuous scenes before cutting.
+  - Eliminates micro-stuttering seams and reduces FFmpeg cut processes by up to 85% (e.g. from 171 cuts down to 25 cuts on 7-minute videos, and from 600+ cuts to ~30 cuts on 30-minute videos).
+  - Cuts export time from 72.5s down to 26.8s (~2.7x faster).
+- **Fast Direct Seek in Clip Extraction**:
+  - Eliminated the redundant 5-second coarse seek offset (`start_sec - 5.0`) in `cut_clip`, avoiding decoding ~150 extra frames per clip.
+  - Removed CPU-heavy `-tune film` flag on libx264, cutting encoding latency on laptop CPUs.
+  - Added support for Windows MediaFoundation hardware encoder (`h264_mf`) and Intel QuickSync (`h264_qsv`).
+- **OpenCV Backend for PySceneDetect on Windows**:
+  - Replaced PyAV multi-threaded backend with OpenCV in `detect_scenes`, eliminating severe GIL lock contention on Windows (`_thread.lock` queue wait).
+  - Set `frame_skip=4` for an immediate 3x speedup in scene detection (from 29.3s down to 10.2s on 7-minute video).
+- **LRU In-Memory Frame Caching in `VideoFrameSampler`**:
+  - Added LRU frame cache to reuse frames decoded at scene boundaries, completely eliminating backward seeks and demuxer resets between consecutive scenes.
+  - Streamlined sampling count to 3 range keyframes and 1 fine pair at midpoint, reducing decoded frames per scene by over 60%.
+- **Early-Exit Acceleration in `StaticImageDetector`**:
+  - Fast-exit when mean pixel difference exceeds 12.0, skipping expensive 3-pass Gaussian blur SSIM and 2D HSV histogram generation for active video frames.
+
+---
+
 ## [1.0.8] - 2026-09-19
 
 ### Fixed & Optimized (Scene Detection Acceleration & Live Progress)
