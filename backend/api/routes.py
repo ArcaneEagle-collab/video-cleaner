@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import shutil
 import uuid
 import asyncio
@@ -8,6 +9,9 @@ from typing import Optional, List, Dict, Any, Tuple
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Header
 from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel
+
+# ─── App version (single source of truth) ────────────────────────────────────
+APP_VERSION = "1.1.0"
 
 from ..video.ffprobe import probe_video, get_ffmpeg_path, get_ffprobe_path
 from ..analysis.classifier import VideoAnalysisPipeline
@@ -439,7 +443,7 @@ async def get_system_info():
     settings = load_settings()
     return {
         "app_name": "Video Cleaner",
-        "version": "1.0.0",
+        "version": APP_VERSION,
         "author": "Amna",
         "os": platform.platform(),
         "python_version": platform.python_version(),
@@ -453,6 +457,15 @@ async def get_system_info():
         "logs_dir": str(get_logs_dir().resolve()),
         "analytics_enabled": settings.get("analytics_enabled", False)
     }
+
+
+@router.get("/version")
+async def get_app_version():
+    """
+    Returns the current app version for the auto-update system.
+    Clients compare this against the latest release on GitHub.
+    """
+    return {"version": APP_VERSION, "app_name": "Video Cleaner"}
 
 @router.post("/system/clean-temp")
 async def trigger_clean_temp():

@@ -123,3 +123,35 @@ export interface TestVideoItem {
   filepath: string;
   metadata: VideoMetadata;
 }
+
+// ─── Electron IPC bridge types (window.electronAPI) ───────────────────────────
+export interface UpdateInfo {
+  hasUpdate: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  downloadUrl?: string;
+  releaseNotes?: string;
+  releaseName?: string;
+  error?: string;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      getApiPort: () => Promise<number>;
+      openDirectory: (dirPath: string) => Promise<void>;
+      openFile: (filePath: string) => Promise<boolean>;
+      showItemInFolder: (filePath: string) => Promise<boolean>;
+      getDefaultDownloadsDir: () => Promise<string>;
+      openLogsFolder: () => Promise<void>;
+      selectDirectory: () => Promise<string | null>;
+      checkForUpdates: () => Promise<{ checking: boolean; currentVersion: string; error?: string; message?: string }>;
+      installUpdate: () => Promise<void>;
+      openDashboard: () => Promise<void>;
+      onVideoDropped: (callback: (filePath: string) => void) => void;
+      onUpdateAvailable: (callback: (info: UpdateInfo) => void) => void;
+      onUpdateDownloadProgress: (callback: (progress: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => void) => void;
+      onUpdateReady: (callback: (info: { version: string; releaseName?: string; releaseNotes?: string }) => void) => void;
+    };
+  }
+}

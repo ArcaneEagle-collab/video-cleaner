@@ -35,8 +35,17 @@ class VideoFrameSampler:
             self.target_w = orig_w
             self.target_h = orig_h
         self.current_frame_pos = -1
+        # Scale cache based on video duration: longer videos need a bigger window
+        # but cap it to prevent RAM exhaustion (each frame ~0.3 MB at 480px wide)
+        video_dur = self.duration
+        if video_dur > 1800:  # > 30 min
+            self._max_cache: int = 512
+        elif video_dur > 600:  # > 10 min
+            self._max_cache: int = 256
+        else:
+            self._max_cache: int = 128
         self._cache: Dict[int, np.ndarray] = {}
-        self._max_cache: int = 128
+        self._cache_order: list = []  # LRU tracking
 
     def _seek_and_read(self, target_idx: int) -> Optional[np.ndarray]:
         """
@@ -48,8 +57,13 @@ class VideoFrameSampler:
         else:
             target_idx = max(0, target_idx)
 
-        # 1. Return from cache if already decoded
+        # 1. Return from cache if already decoded (LRU: move to end)
         if target_idx in self._cache:
+            try:
+                self._cache_order.remove(target_idx)
+            except ValueError:
+                pass
+            self._cache_order.append(target_idx)
             return self._cache[target_idx]
 
         # 2. If target is behind current pos or jump is > 20 frames, seek directly
@@ -67,10 +81,12 @@ class VideoFrameSampler:
         ret, frame = self.cap.read()
         self.current_frame_pos += 1
         if ret and frame is not None:
-            if len(self._cache) >= self._max_cache:
-                first_key = next(iter(self._cache))
-                del self._cache[first_key]
+            # LRU eviction: remove least recently used when cache is full
+            while len(self._cache) >= self._max_cache and self._cache_order:
+                lru_key = self._cache_order.pop(0)
+                self._cache.pop(lru_key, None)
             self._cache[target_idx] = frame
+            self._cache_order.append(target_idx)
             return frame
         return None
 

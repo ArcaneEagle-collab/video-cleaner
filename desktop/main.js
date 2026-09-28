@@ -4,11 +4,75 @@ const net = require("net");
 const http = require("http");
 const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
+const { autoUpdater } = require("electron-updater");
 
 let mainWindow = null;
 let backendProcess = null;
 let activePort = 8000;
 let isQuitting = false;
+
+// ─── Auto-Updater Setup ───────────────────────────────────────────────────────
+// electron-updater handles everything: silent download, install on restart.
+// Users NEVER see GitHub. They only see the in-app notification you design.
+autoUpdater.autoDownload = true;          // Download silently in background
+autoUpdater.autoInstallOnAppQuit = true;  // Install when app is closed
+autoUpdater.logger = null;                // We handle logging ourselves
+
+function setupAutoUpdater() {
+  autoUpdater.on("checking-for-update", () => {
+    logToFile("[Updater] Checking for update...");
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    logToFile(`[Updater] Update available: ${info.version}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-available", {
+        hasUpdate: true,
+        currentVersion: app.getVersion(),
+        latestVersion: info.version,
+        releaseNotes: typeof info.releaseNotes === "string"
+          ? info.releaseNotes.replace(/<[^>]*>/g, "").slice(0, 500)
+          : "",
+        releaseName: info.releaseName || `Version ${info.version}`,
+        isDownloading: true,
+      });
+    }
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    logToFile("[Updater] App is up to date.");
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    logToFile(`[Updater] Download progress: ${Math.round(progress.percent)}%`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-download-progress", {
+        percent: Math.round(progress.percent),
+        transferred: progress.transferred,
+        total: progress.total,
+        bytesPerSecond: progress.bytesPerSecond,
+      });
+    }
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    logToFile(`[Updater] Update downloaded: ${info.version}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-ready", {
+        version: info.version,
+        releaseName: info.releaseName || `Version ${info.version}`,
+        releaseNotes: typeof info.releaseNotes === "string"
+          ? info.releaseNotes.replace(/<[^>]*>/g, "").slice(0, 500)
+          : "",
+      });
+    }
+  });
+
+  autoUpdater.on("error", (err) => {
+    logToFile(`[Updater] Error: ${err.message}`);
+  });
+}
+
 
 // Single Instance Lock
 const gotTheLock = app.requestSingleInstanceLock();
@@ -479,11 +543,17 @@ ipcMain.handle("select-directory", async () => {
 });
 
 ipcMain.handle("check-for-updates", async () => {
-  return {
-    hasUpdate: false,
-    currentVersion: "1.0.0",
-    message: "You are running the latest version: 1.0.0 (Up to date)",
-  };
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { checking: true, currentVersion: app.getVersion() };
+  } catch (err) {
+    return { checking: false, error: err.message, currentVersion: app.getVersion() };
+  }
+});
+
+// User clicked "Restart & Install" in the in-app notification
+ipcMain.handle("install-update", async () => {
+  autoUpdater.quitAndInstall(false, true);
 });
 
 // App Lifecycle
@@ -498,6 +568,9 @@ app.whenReady().then(async () => {
     });
   } catch {}
 
+  // Setup auto-updater event listeners (must be before any check calls)
+  setupAutoUpdater();
+
   createMainWindow();
 
   try {
@@ -508,6 +581,17 @@ app.whenReady().then(async () => {
 
     if (isHealthy) {
       loadApplicationUI(activePort);
+
+      // Check for updates 12 seconds after UI loads (let the app settle first)
+      // electron-updater will silently download and notify via IPC when ready
+      setTimeout(() => {
+        try {
+          autoUpdater.checkForUpdates().catch((e) => {
+            logToFile(`[Updater] Check failed: ${e.message}`);
+          });
+        } catch {}
+      }, 12000);
+
     } else {
       showStartupError();
     }

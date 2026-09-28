@@ -5,6 +5,14 @@
   "directories": {
     "output": "release"
   },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "ArcaneEagle-collab",
+      "repo": "video-cleaner",
+      "releaseType": "release"
+    }
+  ],
   "files": [
     "desktop/**/*",
     "frontend/dist/**/*",

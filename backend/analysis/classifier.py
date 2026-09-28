@@ -259,9 +259,11 @@ class VideoAnalysisPipeline:
         likely_images_count = 0
         likely_usable_count = 0
 
-        workers = min(6, os.cpu_count() or 4)
+        # Scale worker count and window based on available CPU for optimal throughput
+        cpu_count = os.cpu_count() or 4
+        workers = min(8, max(4, cpu_count))
         in_flight: Dict[concurrent.futures.Future, int] = {}
-        window_size = max(6, workers * 3)
+        window_size = max(12, workers * 3)
 
         def process_completed_future(fut: concurrent.futures.Future):
             nonlocal likely_images_count, likely_usable_count

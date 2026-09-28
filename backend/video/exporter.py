@@ -2,6 +2,7 @@ import os
 import json
 import shutil
 import cv2
+import numpy as np
 import concurrent.futures
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Callable
@@ -351,10 +352,14 @@ class VideoExporter:
                 # If only one clip, copy directly
                 shutil.copyfile(clip_paths[0], clean_out)
             else:
+                # Always re-encode the merged output to guarantee seamless,
+                # glitch-free joins at every clip boundary. Stream copy (reencode=False)
+                # causes visual freezes / keyframe flashes when clips have different
+                # keyframe intervals — particularly common with long videos.
                 merge_clips(
                     clip_paths,
                     str(clean_out),
-                    reencode=False,
+                    reencode=True,
                     codec=codec,
                     crf=crf,
                     preset="veryfast"

@@ -134,14 +134,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     if (window.electronAPI?.checkForUpdates) {
       try {
         const res = await window.electronAPI.checkForUpdates();
-        setUpdateStatus(res.message || "You are running the latest version: 1.0.0");
+        setUpdateStatus(res.message || `You are running the latest version: ${res.currentVersion || "1.1.0"}`);
         return;
       } catch {
         // Fallback
       }
     }
     setTimeout(() => {
-      setUpdateStatus("You are running the latest version: 1.0.0 (Up to date)");
+      setUpdateStatus("You are running the latest version: 1.1.0 (Up to date)");
     }, 800);
   };
 

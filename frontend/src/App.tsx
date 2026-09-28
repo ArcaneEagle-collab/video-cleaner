@@ -11,6 +11,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { AnalyticsConsentModal } from "./components/AnalyticsConsentModal";
 import { BatchQueue, BatchItem } from "./components/BatchQueue";
 import { RecentProjects } from "./components/RecentProjects";
+import { UpdateNotification } from "./components/UpdateNotification";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { getApiEndpoint } from "./config/api";
 import { getAnalyticsConsent, trackEvent } from "./services/analytics";
@@ -764,7 +765,7 @@ export function App() {
           fontSize: "12px",
         }}
       >
-        <span>Video Cleaner v1.0.0</span>
+        <span>Video Cleaner v1.1.0</span>
         <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "#F3D079", fontWeight: "600", letterSpacing: "0.02em" }}>
           <Sparkles size={13} color="#D4AF37" /> Made by Amna
         </span>
@@ -780,6 +781,9 @@ export function App() {
         isOpen={isConsentModalOpen}
         onClose={() => setIsConsentModalOpen(false)}
       />
+
+      {/* Auto-Update Notification — appears automatically when a new GitHub release is available */}
+      <UpdateNotification />
     </div>
   );
 }
