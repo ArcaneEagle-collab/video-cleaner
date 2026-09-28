@@ -17,9 +17,10 @@ def trim_blank_lead_in(
     cap: Optional[cv2.VideoCapture] = None
 ) -> float:
     """
-    Checks if the clip begins with solid black frames or motionless freeze-frames
-    (e.g. intro black screen, transition dissolve dips, or lingering still image pixels)
-    and advances start_sec past them to active organic video footage.
+    Checks if the clip begins with solid black frames, dip-to-black fades,
+    white flash frames, or motionless freeze-frames (e.g. intro black screen,
+    transition dissolve dips, or lingering still image pixels) and advances
+    start_sec past them to active organic video footage.
     """
     local_cap = None
     try:
@@ -32,11 +33,11 @@ def trim_blank_lead_in(
         if fps <= 0:
             return start_sec
             
-        start_frame = int(start_sec * fps)
+        start_frame = int(round(start_sec * fps))
         active_cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         
         curr_frame = start_frame
-        max_frame = min(int(end_sec * fps) - 4, start_frame + int(max_trim_sec * fps))
+        max_frame = min(int(round(end_sec * fps)) - 4, start_frame + int(round(max_trim_sec * fps)))
         
         prev_gray = None
         while curr_frame < max_frame:
@@ -44,17 +45,23 @@ def trim_blank_lead_in(
             if not ret or frame is None:
                 break
             
-            # Check 1: Solid black / dark dip frame
-            if frame.mean() <= 6.0:
+            mean_val = float(frame.mean())
+            # Check 1: Solid black / dark dip frame (handles broadcast 16-235 TV levels)
+            if mean_val <= 18.0:
+                curr_frame += 1
+                prev_gray = None
+                continue
+
+            # Check 2: White flash / spike frame
+            if mean_val >= 235.0:
                 curr_frame += 1
                 prev_gray = None
                 continue
                 
-            # Check 2: Pure dead still frame (lingering still image at seam)
+            # Check 3: Pure dead still frame (lingering still image at seam)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if prev_gray is not None:
                 diff = float(np.mean(cv2.absdiff(gray, prev_gray)))
-                # If frame difference is near zero (< 0.45) at seam, it's a freeze frame from the removed slide
                 if diff < 0.45:
                     curr_frame += 1
                     prev_gray = gray
@@ -73,6 +80,86 @@ def trim_blank_lead_in(
         if local_cap is not None and local_cap.isOpened():
             local_cap.release()
     return start_sec
+
+def trim_blank_lead_out(
+    video_path: str,
+    start_sec: float,
+    end_sec: float,
+    max_trim_sec: float = 0.5,
+    cap: Optional[cv2.VideoCapture] = None
+) -> float:
+    """
+    Checks if the clip ends with solid black frames, transition fade-outs,
+    white flash frames, or motionless freeze-frames (e.g. lingering still image pixels
+    or transition dip frames) and retracts end_sec before them to active clean video footage.
+    """
+    local_cap = None
+    try:
+        active_cap = cap
+        if active_cap is None or not active_cap.isOpened():
+            local_cap = cv2.VideoCapture(video_path)
+            active_cap = local_cap
+
+        fps = active_cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            return end_sec
+
+        end_frame = int(round(end_sec * fps))
+        min_frame = max(int(round(start_sec * fps)) + 4, end_frame - int(round(max_trim_sec * fps)))
+        if end_frame <= min_frame:
+            return end_sec
+
+        # Read frames in tail window [min_frame, end_frame)
+        active_cap.set(cv2.CAP_PROP_POS_FRAMES, min_frame)
+        frames_list = []
+        curr = min_frame
+        while curr < end_frame:
+            ret, frame = active_cap.read()
+            if not ret or frame is None:
+                break
+            frames_list.append((curr, frame))
+            curr += 1
+
+        if not frames_list:
+            return end_sec
+
+        # Scan backward from the end
+        cutoff_frame = end_frame
+        prev_gray = None
+        for fn, frame in reversed(frames_list):
+            mean_val = float(frame.mean())
+            # Check 1: Solid black / fade out to black (supports broadcast TV levels)
+            if mean_val <= 18.0:
+                cutoff_frame = fn
+                prev_gray = None
+                continue
+
+            # Check 2: White flash / fade to white
+            if mean_val >= 235.0:
+                cutoff_frame = fn
+                prev_gray = None
+                continue
+
+            # Check 3: Freeze frame / still image at cut point
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if prev_gray is not None:
+                diff = float(np.mean(cv2.absdiff(gray, prev_gray)))
+                if diff < 0.45:
+                    cutoff_frame = fn
+                    prev_gray = gray
+                    continue
+                else:
+                    break
+            prev_gray = gray
+
+        if cutoff_frame < end_frame and cutoff_frame > min_frame:
+            return round(cutoff_frame / fps, 3)
+    except Exception:
+        pass
+    finally:
+        if local_cap is not None and local_cap.isOpened():
+            local_cap.release()
+    return end_sec
 
 def merge_contiguous_intervals(intervals: List[Tuple[float, float]], gap_threshold: float = 0.1) -> List[Tuple[float, float]]:
     """
@@ -138,98 +225,56 @@ class VideoExporter:
 
         # Sort segments chronologically
         sorted_segs = sorted(segments, key=lambda s: float(s.get("start", 0.0)))
-        # 1. Merge contiguous KEEP segments into unified continuous scenes
-        merged_keep_blocks: List[Dict[str, Any]] = []
-        current_block: Optional[Dict[str, Any]] = None
-
+        
+        # Build export clips for EVERY segment marked KEEP to guarantee 1:1 match with analysis
+        keep_clips: List[Dict[str, Any]] = []
         for idx, seg in enumerate(sorted_segs):
             effective_action = seg.get("user_override") or seg.get("action")
             if effective_action != "KEEP":
-                if current_block is not None:
-                    merged_keep_blocks.append(current_block)
-                    current_block = None
                 continue
 
             s_start = float(seg["start"])
             s_end = float(seg["end"])
+            dur = s_end - s_start
 
-            if current_block is None:
-                prev_action = (sorted_segs[idx - 1].get("user_override") or sorted_segs[idx - 1].get("action")) if idx > 0 else None
-                current_block = {
-                    "orig_start": s_start,
-                    "orig_end": s_end,
-                    "segments": [seg],
-                    "prev_is_discarded": (prev_action != "KEEP"),
-                    "next_is_discarded": True,
-                    "primary_segment": seg
-                }
-            else:
-                # If adjacent or overlapping within 0.15s, merge into continuous scene
-                if abs(s_start - current_block["orig_end"]) <= 0.15:
-                    current_block["orig_end"] = max(current_block["orig_end"], s_end)
-                    current_block["segments"].append(seg)
-                else:
-                    merged_keep_blocks.append(current_block)
-                    current_block = {
-                        "orig_start": s_start,
-                        "orig_end": s_end,
-                        "segments": [seg],
-                        "prev_is_discarded": True,
-                        "next_is_discarded": True,
-                        "primary_segment": seg
-                    }
+            prev_action = (sorted_segs[idx - 1].get("user_override") or sorted_segs[idx - 1].get("action")) if idx > 0 else None
+            next_action = (sorted_segs[idx + 1].get("user_override") or sorted_segs[idx + 1].get("action")) if idx < len(sorted_segs) - 1 else None
 
-        if current_block is not None:
-            merged_keep_blocks.append(current_block)
-
-        # Update next_is_discarded based on whether next block follows immediately
-        for i in range(len(merged_keep_blocks)):
-            if i < len(merged_keep_blocks) - 1:
-                gap = merged_keep_blocks[i + 1]["orig_start"] - merged_keep_blocks[i]["orig_end"]
-                merged_keep_blocks[i]["next_is_discarded"] = (gap > 0.15)
-            else:
-                merged_keep_blocks[i]["next_is_discarded"] = True
-
-        keep_clips: List[Dict[str, Any]] = []
-        for block in merged_keep_blocks:
-            orig_start = block["orig_start"]
-            orig_end = block["orig_end"]
-            dur = orig_end - orig_start
-            prev_is_discarded = block["prev_is_discarded"]
-            next_is_discarded = block["next_is_discarded"]
+            prev_is_discarded = (prev_action != "KEEP")
+            next_is_discarded = (next_action != "KEEP")
 
             # Max safety inset for short clips: ensure the clip is never wiped out
             max_inset = max(0.0, (dur - 0.15) / 2.0)
             eff_start_inset = min(safety_inset, max_inset) if prev_is_discarded else 0.0
             eff_end_inset = min(safety_inset, max_inset) if next_is_discarded else 0.0
 
-            # Calculate safe boundaries
+            # Calculate safe boundaries: isolate from adjacent discarded image/transition
             if prev_is_discarded:
-                start_p = orig_start + eff_start_inset
+                start_p = s_start + eff_start_inset
             else:
-                start_p = max(0.0, orig_start - padding)
+                start_p = max(0.0, s_start - padding)
 
             if next_is_discarded:
-                end_p = orig_end - eff_end_inset
+                end_p = s_end - eff_end_inset
             else:
-                end_p = orig_end + padding
+                end_p = s_end + padding
                 if total_duration > 0:
                     end_p = min(total_duration, end_p)
 
             # Ensure minimum viable duration of at least 0.08s and end_p > start_p
             if end_p - start_p < 0.08:
                 if dur >= 0.08:
-                    start_p = orig_start
-                    end_p = orig_end
+                    start_p = s_start
+                    end_p = s_end
                 else:
                     end_p = max(start_p + 0.08, end_p)
 
             keep_clips.append({
-                "segment": block["primary_segment"],
+                "segment": seg,
                 "start": round(start_p, 3),
                 "end": round(end_p, 3),
-                "orig_start": orig_start,
-                "orig_end": orig_end,
+                "orig_start": s_start,
+                "orig_end": s_end,
                 "prev_is_discarded": prev_is_discarded,
                 "next_is_discarded": next_is_discarded
             })
@@ -262,17 +307,25 @@ class VideoExporter:
                 "merged_intervals": [[c["start"], c["end"]] for c in keep_clips]
             }, f, indent=2)
 
-        # Pre-trim blank lead-in frames sequentially using single capture stream
+        # Pre-trim blank lead-in and lead-out transition / still freeze frames
         cap = None
         try:
             cap = cv2.VideoCapture(video_path)
             for clip_info in keep_clips:
                 c_start = clip_info["start"]
                 c_end = clip_info["end"]
+                # 1. Lead-in trimming: black dip, flash, or freeze frames at clip start
                 if clip_info.get("prev_is_discarded") or clip_info["orig_start"] < 0.5 or (c_start - clip_info["orig_start"] > 0.05):
                     trimmed_start = trim_blank_lead_in(video_path, c_start, c_end, cap=cap)
                     if c_end - trimmed_start >= 0.08:
                         clip_info["start"] = trimmed_start
+
+                # 2. Lead-out trimming: black dip, flash, or freeze frames at clip end
+                c_start = clip_info["start"]
+                if clip_info.get("next_is_discarded") or (total_duration > 0 and (total_duration - clip_info["orig_end"]) < 0.5) or (clip_info["orig_end"] - c_end > 0.05):
+                    trimmed_end = trim_blank_lead_out(video_path, c_start, c_end, cap=cap)
+                    if trimmed_end - c_start >= 0.08:
+                        clip_info["end"] = trimmed_end
         except Exception:
             pass
         finally:

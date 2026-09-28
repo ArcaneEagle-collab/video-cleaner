@@ -1,7 +1,7 @@
 {
   "name": "video-cleaner",
   "productName": "Video Cleaner",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Video Cleaner by Amna - Intelligent editorial image removal and usable footage extractor",
   "main": "desktop/main.js",
   "author": {

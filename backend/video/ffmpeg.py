@@ -136,7 +136,10 @@ class VideoFrameSampler:
             dt = max(0.04, dur * 0.5)
 
         # 1. Compute range target indices
-        times = np.linspace(start_sec, end_sec, count)
+        # Inset range times by at least 1-2 frames to strictly stay within scene boundaries
+        # and prevent sampling cut frames from adjacent scenes
+        inset = min(0.08, dur * 0.08)
+        times = np.linspace(start_sec + inset, end_sec - inset, count)
         range_requests: List[Tuple[float, int]] = []
         for t in times:
             fn = int(round(t * self.native_fps))
@@ -145,15 +148,16 @@ class VideoFrameSampler:
             range_requests.append((float(t), fn))
 
         # 2. Compute fine pair checkpoints
+        pair_margin = max(dt, inset)
         if pair_count == 1:
             checkpoints = [start_sec + dur * 0.5]
         else:
-            checkpoints = [start_sec + dur * (i + 1) / (pair_count + 1) for i in range(pair_count)]
+            checkpoints = [start_sec + pair_margin + (dur - 2 * pair_margin) * (i + 1) / (pair_count + 1) for i in range(pair_count)]
 
         pair_requests: List[Tuple[float, int, int]] = []
         for t in checkpoints:
-            t1 = min(t, max(0.0, end_sec - dt))
-            t2 = t1 + dt
+            t1 = min(max(start_sec, t - dt * 0.5), max(start_sec, end_sec - dt - 0.01))
+            t2 = min(end_sec - 0.01, t1 + dt)
             f1_idx = int(round(t1 * self.native_fps))
             f2_idx = int(round(t2 * self.native_fps))
             if self.total_frames > 1:
@@ -390,6 +394,7 @@ def merge_clips(
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-b:a", "192k",
+            "-af", "aresample=async=1000",
             "-avoid_negative_ts", "make_zero",
             str(Path(output_path).resolve())
         ]

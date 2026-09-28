@@ -29,9 +29,11 @@ def main():
     else:
         log("Bundled FFmpeg and FFprobe verified.")
 
+    rebuild = "--rebuild" in sys.argv or "--force" in sys.argv
+
     # 2. Build Backend with PyInstaller
     server_exe = ROOT / "dist-backend" / "server" / "server.exe"
-    if not server_exe.exists():
+    if rebuild or not server_exe.exists():
         log("Compiling standalone backend with PyInstaller...")
         run_cmd([sys.executable, str(ROOT / "scripts" / "build_backend.py")])
     else:
@@ -39,7 +41,7 @@ def main():
 
     # 3. Build Frontend with Vite
     frontend_dist = ROOT / "frontend" / "dist" / "index.html"
-    if not frontend_dist.exists():
+    if rebuild or not frontend_dist.exists():
         log("Building Vite React frontend...")
         npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
         run_cmd([npm_cmd, "run", "build"], cwd=ROOT / "frontend")

@@ -16,8 +16,8 @@ class TransitionDetector:
         if len(frames) < 2:
             return {"detected": False, "type": "NONE", "confidence": 0.0, "reason": "Insufficient frames"}
 
-        # Transitions are typically short (< 2.5 seconds)
-        if duration > 3.0:
+        # Transitions typically last up to 4.5 seconds
+        if duration > 4.5:
             return {"detected": False, "type": "NONE", "confidence": 0.0, "reason": "Duration exceeds transition limits"}
 
         luminances = []
@@ -53,11 +53,14 @@ class TransitionDetector:
 
         min_lum = min(luminances)
         max_lum = max(luminances)
+        avg_lum = float(np.mean(luminances))
         avg_edge = float(np.mean(edge_energies))
+        min_edge = min(edge_energies) if edge_energies else 0.0
+        max_edge = max(edge_energies) if edge_energies else 0.0
 
-        # 1. Dip to Black
-        if min_lum < 15.0:
-            confidence = min(0.96, 0.75 + (15.0 - min_lum) * 0.015)
+        # 1. Dip to Black / Fade to Black / Black Screen (handles both full range and broadcast 16-235 TV levels)
+        if min_lum < 22.0 or avg_lum < 18.0:
+            confidence = min(0.98, 0.78 + (22.0 - min_lum) * 0.015)
             return {
                 "detected": True,
                 "type": "DIP_TO_BLACK",
@@ -65,9 +68,9 @@ class TransitionDetector:
                 "reason": f"Luminance dropped to black ({min_lum:.1f})"
             }
 
-        # 2. Dip to White / Flash
-        if max_lum > 240.0:
-            confidence = min(0.96, 0.75 + (max_lum - 240.0) * 0.015)
+        # 2. Dip to White / Flash / White Screen
+        if max_lum > 232.0 or avg_lum > 230.0:
+            confidence = min(0.98, 0.78 + (max_lum - 232.0) * 0.015)
             return {
                 "detected": True,
                 "type": "DIP_TO_WHITE" if duration > 0.4 else "FLASH",
@@ -75,14 +78,23 @@ class TransitionDetector:
                 "reason": f"Luminance spiked to white ({max_lum:.1f})"
             }
 
-        # 3. Crossfade / Dissolve: low edge sharpness throughout short duration with steady histogram change
+        # 3. Crossfade / Dissolve: low edge sharpness at transition midpoint with progressive histogram shift
         avg_hist_diff = float(np.mean(hist_diffs)) if hist_diffs else 0.0
-        if avg_edge < 40.0 and avg_hist_diff > 0.25 and duration <= 2.0:
+        if avg_hist_diff > 0.20 and (avg_edge < 45.0 or (max_edge > 0 and min_edge / max_edge < 0.55)) and duration <= 3.5:
             return {
                 "detected": True,
                 "type": "CROSSFADE",
-                "confidence": 0.82,
-                "reason": "Gradual blended dissolve with low edge sharpness"
+                "confidence": 0.85,
+                "reason": "Gradual blended dissolve / crossfade pattern"
+            }
+
+        # 4. Pure solid / blank screen transition (near zero variance across all frames)
+        if avg_edge < 5.0 and avg_hist_diff < 0.05 and (avg_lum < 30.0 or avg_lum > 220.0):
+            return {
+                "detected": True,
+                "type": "BLANK_SCREEN",
+                "confidence": 0.95,
+                "reason": f"Blank screen transition (lum: {avg_lum:.1f}, edge: {avg_edge:.1f})"
             }
 
         return {

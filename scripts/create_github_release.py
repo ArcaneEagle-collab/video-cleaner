@@ -63,11 +63,17 @@ High-Performance Engine Overhaul, Thread-Safe Concurrency, Sub-Second Local File
 
     assets = []
     setup_exe = RELEASE_DIR / "VideoCleaner-Setup.exe"
+    blockmap = RELEASE_DIR / "VideoCleaner-Setup.exe.blockmap"
+    latest_yml = RELEASE_DIR / "latest.yml"
     portable_zip = RELEASE_DIR / "VideoCleaner-Portable.zip"
     checksums = RELEASE_DIR / "SHA256SUMS.txt"
 
     if setup_exe.exists():
         assets.append(str(setup_exe))
+    if blockmap.exists():
+        assets.append(str(blockmap))
+    if latest_yml.exists():
+        assets.append(str(latest_yml))
     if portable_zip.exists():
         assets.append(str(portable_zip))
     if checksums.exists():

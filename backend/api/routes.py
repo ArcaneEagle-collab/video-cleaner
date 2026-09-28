@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 # ─── App version (single source of truth) ────────────────────────────────────
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 
 from ..video.ffprobe import probe_video, get_ffmpeg_path, get_ffprobe_path
 from ..analysis.classifier import VideoAnalysisPipeline

@@ -295,8 +295,8 @@ class VideoAnalysisPipeline:
                     return {"cancelled": True}
 
                 s_duration = s_end - s_start
-                # High-speed sampling: 3 keyframes (start, mid, end) and 1 fine pair at midpoint
-                sample_count = 3 if s_duration <= 5.0 else 4
+                # High-speed sampling: 5 keyframes across scene for robust transition & image detection
+                sample_count = 5 if s_duration <= 5.0 else 6
                 pair_count = 1
                 frames, fine_pairs = sampler.sample_scene_data(
                     s_start, s_end,
@@ -374,14 +374,21 @@ class VideoAnalysisPipeline:
 
             # 2. Check Ken Burns Zoom / Pan / Slide
             elif zoom.get("detected") and zoom.get("confidence", 0) >= 0.50:
-                zoom_type = zoom.get("type", "IMAGE_ZOOM")
-                classification = zoom_type
-                confidence = zoom["confidence"]
-                if "ZOOM" in zoom_type:
-                    reason = f"Artificial Ken Burns zoom (Flow scale: {zoom.get('scale_change', 1.0):.3f}, planar affine fit)"
+                # Protect real video with organic motion and independent local movement
+                if motion.get("is_organic_motion") and motion.get("local_motion_score", 0) > 0.20:
+                    classification = "REAL_VIDEO"
+                    confidence = 0.85
+                    reason = f"Natural camera video footage with organic motion (score: {motion.get('motion_score', 0):.2f})"
+                    action = "KEEP"
                 else:
-                    reason = f"Artificial Ken Burns pan/slide (Uniform planar translation, residual: {zoom.get('residual_error', 0):.2f})"
-                action = "REMOVE"
+                    zoom_type = zoom.get("type", "IMAGE_ZOOM")
+                    classification = zoom_type
+                    confidence = zoom["confidence"]
+                    if "ZOOM" in zoom_type:
+                        reason = f"Artificial Ken Burns zoom (Flow scale: {zoom.get('scale_change', 1.0):.3f}, planar affine fit)"
+                    else:
+                        reason = f"Artificial Ken Burns pan/slide (Uniform planar translation, residual: {zoom.get('residual_error', 0):.2f})"
+                    action = "REMOVE"
 
             # 3. Check Image Over Background (photo card over moving background, top photo over ticker, blurred wings)
             elif bg.get("detected") and bg.get("confidence", 0) >= 0.70:
@@ -391,28 +398,35 @@ class VideoAnalysisPipeline:
                 action = "REMOVE"
 
             # 4. Check Static Image
-            elif static.get("confidence", 0) >= 0.70:
+            elif static.get("confidence", 0) >= 0.65 or static.get("is_static", False):
                 # Protect talking heads and low-motion real video
-                if (motion.get("local_motion_score", 0) > 0.10 or static.get("temporal_noise", 0) > 0.6) and static.get("avg_pixel_diff", 0) > 0.8:
+                if (motion.get("local_motion_score", 0) > 0.12 or static.get("temporal_noise", 0) > 0.8) and static.get("avg_pixel_diff", 0) > 0.8 and motion.get("motion_score", 0) > 0.05:
                     classification = "REAL_VIDEO"
                     confidence = 0.82
                     reason = "Static camera with subtle local organic movement (talking head / living subject)"
                     action = "KEEP"
                 else:
                     classification = "STATIC_IMAGE"
-                    confidence = static["confidence"]
+                    confidence = max(static.get("confidence", 0.85), 0.85)
                     reason = f"Still frame sequence (SSIM: {static.get('avg_ssim', 0):.3f}, zero temporal motion)"
                     action = "REMOVE"
 
-            # 5. Check Duplicate Still
-            elif dup.get("is_duplicate"):
+            # 5. Check Duplicate Still (only if scene lacks organic motion)
+            elif dup.get("is_duplicate") and not motion.get("is_organic_motion") and motion.get("local_motion_score", 0) < 0.20:
                 classification = "STATIC_IMAGE"
                 confidence = dup.get("confidence", 0.9)
                 reason = f"Repeated still image slide (matched earlier scene at {dup.get('matched_timestamp', 0):.1f}s)"
                 action = "REMOVE"
 
-            # 6. Real Video vs Ambiguous
-            elif (motion.get("is_organic_motion") or motion.get("motion_score", 0) > 0.35) and static.get("confidence", 0) < 0.50 and zoom.get("confidence", 0) < 0.45 and bg.get("confidence", 0) < 0.50:
+            # 6. Dead motionless frame check (near-zero optical flow, no localized movement, and tiny pixel difference)
+            elif motion.get("motion_score", 0) < 0.02 and static.get("avg_pixel_diff", 0) < 0.05 and static.get("max_pixel_diff", 0) < 15.0 and not motion.get("is_organic_motion"):
+                classification = "STATIC_IMAGE"
+                confidence = 0.95
+                reason = f"Zero motion still frame sequence (motion score: {motion.get('motion_score', 0):.3f})"
+                action = "REMOVE"
+
+            # 7. Real Video vs Ambiguous
+            elif (motion.get("is_organic_motion") or motion.get("motion_score", 0) > 0.30) and static.get("confidence", 0) < 0.50 and zoom.get("confidence", 0) < 0.45 and bg.get("confidence", 0) < 0.50:
                 classification = "REAL_VIDEO"
                 confidence = max(0.80, 1.0 - static.get("confidence", 0.0))
                 reason = f"Real video footage with organic motion (score: {motion.get('motion_score', 0):.2f})"
@@ -433,13 +447,9 @@ class VideoAnalysisPipeline:
                     action = "KEEP"
 
             # Adjust action according to sensitivity threshold
+            # An image or transition must NEVER be promoted to "KEEP"
             if action == "REMOVE" and confidence < self.remove_threshold:
-                if confidence >= self.uncertain_threshold:
-                    action = "UNCERTAIN"
-                else:
-                    action = "KEEP"
-            elif action == "UNCERTAIN" and confidence < self.uncertain_threshold:
-                action = "KEEP"
+                action = "UNCERTAIN"
 
             classified_segments.append({
                 "id": f"seg_{idx + 1:03d}",

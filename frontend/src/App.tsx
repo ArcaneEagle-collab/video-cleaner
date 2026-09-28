@@ -237,7 +237,10 @@ export function App() {
     setSegments((prev) =>
       prev.map((s) => {
         if (mode === "keep_all") return { ...s, user_override: "KEEP" };
-        if (mode === "remove_detected") return { ...s, user_override: "REMOVE" };
+        if (mode === "remove_detected") {
+          const isImageOrTransition = s.classification !== "REAL_VIDEO";
+          return isImageOrTransition ? { ...s, user_override: "REMOVE" } : { ...s, user_override: "KEEP" };
+        }
         return { ...s, user_override: null };
       })
     );
@@ -765,7 +768,7 @@ export function App() {
           fontSize: "12px",
         }}
       >
-        <span>Video Cleaner v1.1.0</span>
+        <span>Video Cleaner v1.1.1</span>
         <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "#F3D079", fontWeight: "600", letterSpacing: "0.02em" }}>
           <Sparkles size={13} color="#D4AF37" /> Made by Amna
         </span>

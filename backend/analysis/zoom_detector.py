@@ -107,18 +107,29 @@ class ZoomPanDetector:
         confidence = 0.0
 
         # Planar Ken Burns criteria on fine pairs:
-        # Inliers > 88% and residual < 0.85 px
+        # Inliers > 88% and residual < 0.85 px showing 2D planar motion
         if avg_inliers > 0.88 and avg_residual < 0.85:
-            detected = True
-            confidence = min(0.98, 0.70 + (avg_inliers - 0.85) * 1.5 + (0.85 - avg_residual) * 0.2)
-            if avg_radial > 0.58:
+            scale_diff = abs(avg_scale - 1.0)
+            is_zoom_in = avg_radial > 0.54 or (scale_diff > 0.003 and avg_radial > 0.53)
+            is_zoom_out = avg_radial < 0.46 or (scale_diff > 0.003 and avg_radial < 0.47)
+            is_pan = avg_pan > 0.4
+
+            if is_zoom_in:
+                detected = True
+                confidence = min(0.98, 0.75 + (avg_radial - 0.50) * 2.0 + (0.85 - avg_residual) * 0.2)
                 detected_type = "IMAGE_ZOOM_IN"
-            elif avg_radial < 0.42:
+            elif is_zoom_out:
+                detected = True
+                confidence = min(0.98, 0.75 + (0.50 - avg_radial) * 2.0 + (0.85 - avg_residual) * 0.2)
                 detected_type = "IMAGE_ZOOM_OUT"
-            elif avg_pan > 0.3:
+            elif is_pan:
+                detected = True
+                confidence = min(0.95, 0.65 + (avg_pan * 0.1) + (0.85 - avg_residual) * 0.2)
                 detected_type = "IMAGE_PAN"
             else:
-                detected_type = "IMAGE_ZOOM"
+                detected = False
+                detected_type = "NONE"
+                confidence = 0.0
 
         return {
             "detected": detected,
