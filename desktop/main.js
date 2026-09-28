@@ -592,6 +592,15 @@ app.whenReady().then(async () => {
         } catch {}
       }, 12000);
 
+      // Periodically check for updates every 60 minutes while app remains open
+      setInterval(() => {
+        try {
+          autoUpdater.checkForUpdates().catch((e) => {
+            logToFile(`[Updater] Periodic check failed: ${e.message}`);
+          });
+        } catch {}
+      }, 60 * 60 * 1000);
+
     } else {
       showStartupError();
     }
