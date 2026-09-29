@@ -21,6 +21,7 @@ server.spec
 dist/
 build/
 release/
+!release/release_notes.md
 frontend/dist/
 resources/ffmpeg/
 .vite/

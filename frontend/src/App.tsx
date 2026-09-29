@@ -795,7 +795,7 @@ export function App() {
           fontSize: "12px",
         }}
       >
-        <span>Video Cleaner v1.1.1</span>
+        <span>Video Cleaner v1.1.2</span>
         <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "#F3D079", fontWeight: "600", letterSpacing: "0.02em" }}>
           <Sparkles size={13} color="#D4AF37" /> Made by Amna
         </span>
