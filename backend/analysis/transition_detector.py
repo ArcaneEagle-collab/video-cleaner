@@ -16,8 +16,8 @@ class TransitionDetector:
         if len(frames) < 2:
             return {"detected": False, "type": "NONE", "confidence": 0.0, "reason": "Insufficient frames"}
 
-        # Transitions typically last up to 4.5 seconds
-        if duration > 4.5:
+        # Transitions typically last up to 5.5 seconds
+        if duration > 5.5:
             return {"detected": False, "type": "NONE", "confidence": 0.0, "reason": "Duration exceeds transition limits"}
 
         luminances = []
@@ -59,8 +59,8 @@ class TransitionDetector:
         max_edge = max(edge_energies) if edge_energies else 0.0
 
         # 1. Dip to Black / Fade to Black / Black Screen (handles both full range and broadcast 16-235 TV levels)
-        if min_lum < 22.0 or avg_lum < 18.0:
-            confidence = min(0.98, 0.78 + (22.0 - min_lum) * 0.015)
+        if min_lum < 28.0 or avg_lum < 24.0:
+            confidence = min(0.98, 0.78 + (28.0 - min_lum) * 0.015)
             return {
                 "detected": True,
                 "type": "DIP_TO_BLACK",
@@ -69,8 +69,8 @@ class TransitionDetector:
             }
 
         # 2. Dip to White / Flash / White Screen
-        if max_lum > 232.0 or avg_lum > 230.0:
-            confidence = min(0.98, 0.78 + (max_lum - 232.0) * 0.015)
+        if max_lum > 226.0 or avg_lum > 222.0:
+            confidence = min(0.98, 0.78 + (max_lum - 226.0) * 0.015)
             return {
                 "detected": True,
                 "type": "DIP_TO_WHITE" if duration > 0.4 else "FLASH",

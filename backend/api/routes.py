@@ -57,7 +57,7 @@ class AnalysisRequest(BaseModel):
     video_path: str
     task_id: Optional[str] = None
     sensitivity: str = "Medium"
-    min_clip_duration: float = 1.2
+    min_clip_duration: float = 0.5
     min_clip_gap: float = 0.3
     detect_static: bool = True
     detect_zoom_pan: bool = True
@@ -74,9 +74,9 @@ class ExportRequest(BaseModel):
     video_path: str
     segments: List[Dict[str, Any]]
     export_combined: bool = True
-    export_individual: bool = True
+    export_individual: bool = False
     quality: str = "High"
-    include_audio: bool = True
+    include_audio: bool = False
     codec: str = "libx264"
     padding_sec: float = 0.0
     output_dir: Optional[str] = None
@@ -195,6 +195,8 @@ async def stream_video(filename: str, path: Optional[str] = Query(None)):
         mime_type = "video/webm"
     elif target_file.suffix.lower() == ".mkv":
         mime_type = "video/x-matroska"
+    elif target_file.suffix.lower() == ".zip":
+        mime_type = "application/zip"
 
     return FileResponse(
         path=target_file,
@@ -227,6 +229,15 @@ def run_analysis_task(task_id: str, req: AnalysisRequest):
             **data
         }
         ws_manager.broadcast_sync(msg)
+        if task_id in analysis_store:
+            analysis_store[task_id].update({
+                "stage": data.get("stage", "Analyzing..."),
+                "percent": data.get("percent", 0),
+                "current_scene": data.get("current_scene"),
+                "total_scenes": data.get("total_scenes"),
+                "likely_images": data.get("likely_images", 0),
+                "likely_usable": data.get("likely_usable", 0),
+            })
 
     def cancel_check() -> bool:
         return ws_manager.is_task_cancelled(task_id)

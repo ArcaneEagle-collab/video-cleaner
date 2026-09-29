@@ -345,7 +345,8 @@ def merge_clips(
     reencode: bool = True,
     codec: str = "libx264",
     crf: int = 18,
-    preset: str = "veryfast"
+    preset: str = "veryfast",
+    include_audio: bool = True
 ) -> bool:
     """
     Concatenates multiple video clips into a single video file.
@@ -382,6 +383,12 @@ def merge_clips(
             if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
                 return True
 
+        audio_flags = [
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-af", "aresample=async=1000",
+        ] if include_audio else ["-an"]
+
         # Frame-accurate, clean re-encode concat demuxer
         cmd = [
             ffmpeg_cmd, "-y",
@@ -392,9 +399,7 @@ def merge_clips(
             "-crf", str(crf),
             "-preset", preset,
             "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-af", "aresample=async=1000",
+            *audio_flags,
             "-avoid_negative_ts", "make_zero",
             str(Path(output_path).resolve())
         ]

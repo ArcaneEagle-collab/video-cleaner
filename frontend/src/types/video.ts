@@ -112,6 +112,12 @@ export interface ExportResult {
     duration: number;
     size_mb: number;
   }>;
+  zip_file?: {
+    filename: string;
+    filepath: string;
+    relative_path: string;
+    size_mb: number;
+  };
   analysis_json?: string;
   surviving_clips_count?: number;
   message?: string;

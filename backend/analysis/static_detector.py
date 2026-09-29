@@ -175,21 +175,31 @@ class StaticImageDetector:
 
         # Confidence calculation
         confidence = 0.0
-        # If there's local localized motion (max diff > 25, like speaking mouth / blinking eyes), it's NOT a static photo
-        has_local_movement = max_diff > 25.0
+        # Localized organic movement (talking mouth, blinking eyes, hand gesture)
+        # produces large localized pixel changes (> 45.0) even when the surrounding background is still.
+        # A static image slide with compression noise never exceeds max_diff of ~25.0.
+        has_local_movement = (max_diff > 45.0)
+        # Heavy camera sensor noise is typical of real camera sensors (> 2.2),
+        # whereas clean still slides produce minimal temporal noise (< 1.5).
+        has_real_sensor_noise = (avg_noise > 2.2)
 
-        if avg_ssim > 0.996 and avg_pixel_diff < 0.6 and avg_dhash_dist == 0 and not has_local_movement:
+        if avg_ssim > 0.994 and avg_pixel_diff < 0.8 and avg_dhash_dist == 0 and not has_local_movement:
             confidence = 0.98
-        elif avg_ssim > 0.990 and avg_pixel_diff < 1.0 and avg_dhash_dist <= 1:
-            if avg_noise > 1.0 or has_local_movement:
-                confidence = 0.25 # Protected: real footage / living subject
+        elif avg_ssim > 0.985 and avg_pixel_diff < 1.8 and avg_dhash_dist <= 1:
+            if has_real_sensor_noise or has_local_movement:
+                confidence = 0.35 # Protected: real footage / living subject
             else:
-                confidence = 0.88
-        elif avg_ssim > 0.97 and avg_pixel_diff < 2.0:
-            if avg_noise > 0.8 or has_local_movement:
-                confidence = 0.15 # Protected
+                confidence = 0.92
+        elif avg_ssim > 0.960 and avg_pixel_diff < 3.5 and avg_dhash_dist <= 2:
+            if has_real_sensor_noise or has_local_movement:
+                confidence = 0.25 # Protected
             else:
-                confidence = 0.70
+                confidence = 0.85
+        elif avg_ssim > 0.930 and avg_pixel_diff < 5.5 and avg_dhash_dist <= 3 and avg_hist_corr > 0.95:
+            if has_real_sensor_noise or has_local_movement:
+                confidence = 0.20
+            else:
+                confidence = 0.72
         else:
             confidence = 0.10
 

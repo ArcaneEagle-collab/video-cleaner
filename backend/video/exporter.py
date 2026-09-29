@@ -13,7 +13,7 @@ def trim_blank_lead_in(
     video_path: str,
     start_sec: float,
     end_sec: float,
-    max_trim_sec: float = 0.5,
+    max_trim_sec: float = 1.0,
     cap: Optional[cv2.VideoCapture] = None
 ) -> float:
     """
@@ -46,14 +46,14 @@ def trim_blank_lead_in(
                 break
             
             mean_val = float(frame.mean())
-            # Check 1: Solid black / dark dip frame (handles broadcast 16-235 TV levels)
-            if mean_val <= 18.0:
+            # Check 1: Solid black / dark dip frame (handles broadcast 16-235 TV levels and graded black)
+            if mean_val <= 26.0:
                 curr_frame += 1
                 prev_gray = None
                 continue
 
             # Check 2: White flash / spike frame
-            if mean_val >= 235.0:
+            if mean_val >= 226.0:
                 curr_frame += 1
                 prev_gray = None
                 continue
@@ -62,7 +62,7 @@ def trim_blank_lead_in(
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if prev_gray is not None:
                 diff = float(np.mean(cv2.absdiff(gray, prev_gray)))
-                if diff < 0.45:
+                if diff < 0.65:
                     curr_frame += 1
                     prev_gray = gray
                     continue
@@ -85,7 +85,7 @@ def trim_blank_lead_out(
     video_path: str,
     start_sec: float,
     end_sec: float,
-    max_trim_sec: float = 0.5,
+    max_trim_sec: float = 1.0,
     cap: Optional[cv2.VideoCapture] = None
 ) -> float:
     """
@@ -128,14 +128,14 @@ def trim_blank_lead_out(
         prev_gray = None
         for fn, frame in reversed(frames_list):
             mean_val = float(frame.mean())
-            # Check 1: Solid black / fade out to black (supports broadcast TV levels)
-            if mean_val <= 18.0:
+            # Check 1: Solid black / fade out to black (supports broadcast TV levels and graded black)
+            if mean_val <= 26.0:
                 cutoff_frame = fn
                 prev_gray = None
                 continue
 
             # Check 2: White flash / fade to white
-            if mean_val >= 235.0:
+            if mean_val >= 226.0:
                 cutoff_frame = fn
                 prev_gray = None
                 continue
@@ -144,7 +144,7 @@ def trim_blank_lead_out(
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if prev_gray is not None:
                 diff = float(np.mean(cv2.absdiff(gray, prev_gray)))
-                if diff < 0.45:
+                if diff < 0.65:
                     cutoff_frame = fn
                     prev_gray = gray
                     continue
@@ -200,6 +200,7 @@ class VideoExporter:
         """
         meta = probe_video(video_path)
         total_duration = meta.get("duration", 0.0)
+        has_audio = bool(meta.get("has_audio", False))
         source_name = Path(video_path).stem
 
         # Create project output folder: outputs/{source_name}_export/
@@ -211,7 +212,7 @@ class VideoExporter:
         export_combined = bool(export_settings.get("export_combined", True))
         export_individual = bool(export_settings.get("export_individual", True))
         quality = export_settings.get("quality", "High")
-        include_audio = bool(export_settings.get("include_audio", True))
+        include_audio = bool(export_settings.get("include_audio", True)) and has_audio
         codec = export_settings.get("codec", "libx264")
 
         # CRF mapping: "Original" uses visually lossless CRF 16 with guaranteed frame accuracy
@@ -219,9 +220,9 @@ class VideoExporter:
         crf = crf_map.get(quality, 18)
         reencode = True  # Always frame-accurate re-encode to prevent keyframe snapping
 
-        # Safety inset (~8-10 frames at 24-30fps) to eliminate any transition dissolve / blur / flash ghosting
+        # Safety inset (~12-14 frames at 24-30fps) to eliminate any transition dissolve / blur / flash ghosting
         # when bordering a segment not marked for KEEP
-        safety_inset = 0.35
+        safety_inset = 0.45
 
         # Sort segments chronologically
         sorted_segs = sorted(segments, key=lambda s: float(s.get("start", 0.0)))
@@ -415,7 +416,8 @@ class VideoExporter:
                     reencode=True,
                     codec=codec,
                     crf=crf,
-                    preset="veryfast"
+                    preset="veryfast",
+                    include_audio=include_audio
                 )
 
             if clean_out.exists():
@@ -436,7 +438,29 @@ class VideoExporter:
                     "size_mb": round(target_combined_path.stat().st_size / (1024 * 1024), 2)
                 }
 
-        # If individual clips were not explicitly requested, clean them up or keep them
+        # If individual clips were requested, also generate a single downloadable zip file
+        zip_file_info = None
+        if export_individual and individual_clips:
+            import zipfile
+            zip_name = f"{source_name}_all_clips.zip"
+            zip_path = project_dir / zip_name
+            try:
+                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for clip in individual_clips:
+                        cp = Path(clip["filepath"])
+                        if cp.exists():
+                            zf.write(cp, arcname=cp.name)
+                if zip_path.exists():
+                    zip_file_info = {
+                        "filename": zip_name,
+                        "filepath": str(zip_path.resolve()),
+                        "relative_path": f"outputs/{project_dir.name}/{zip_name}",
+                        "size_mb": round(zip_path.stat().st_size / (1024 * 1024), 2)
+                    }
+            except Exception:
+                pass
+
+        # If individual clips were not explicitly requested, clean them up
         if not export_individual and combined_video_info:
             for p in clip_paths:
                 try:
@@ -459,6 +483,7 @@ class VideoExporter:
             "project_dir": str(project_dir.resolve()),
             "combined_video": combined_video_info,
             "individual_clips": individual_clips,
+            "zip_file": zip_file_info,
             "analysis_json": str(state_file.resolve()),
             "surviving_clips_count": len(keep_clips)
         }

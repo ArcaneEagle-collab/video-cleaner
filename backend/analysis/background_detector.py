@@ -252,7 +252,15 @@ class ImageWithBackgroundDetector:
                 reason = f"Still photo in upper frame ({avg['top_zero']*100:.0f}% static) over animated banner/ticker"
 
         # Check 5: Photo Card Inset over Moving Backdrop
-        elif (avg["cen_zero"] > 0.48 or (avg["cen_inl"] > 0.85 and avg["cen_res"] < 0.65)) and avg["bdr_mag"] > 0.45:
+        # Requires true disparity: center is either motionless (cen_zero > 0.55 or cen_mag < 0.25)
+        # with moving backdrop (bdr_mag > 0.50), OR has card borders with significant speed disparity.
+        elif (
+            (avg["cen_zero"] > 0.55 or avg["cen_mag"] < 0.25) and avg["bdr_mag"] > 0.50
+        ) or (
+            (avg["white_ratio"] > 0.08 or avg["cen_inl"] > 0.88) and
+            (avg["bdr_mag"] - avg["cen_mag"] > 0.50) and
+            avg["cen_res"] < 0.55 and avg["cen_mag"] < 0.35
+        ):
             detected = True
             confidence = 0.93
             bg_subtype = "STATIC_INSET_PHOTO_CARD"

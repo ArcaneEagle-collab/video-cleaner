@@ -41,7 +41,7 @@ export function App() {
   // Analysis Settings
   const [settings, setSettings] = useState<AnalysisSettings>({
     sensitivity: "Medium",
-    min_clip_duration: 1.2,
+    min_clip_duration: 0.5,
     min_clip_gap: 0.3,
     detect_static: true,
     detect_zoom_pan: true,
@@ -431,16 +431,34 @@ export function App() {
             const pollRes = await fetch(getApiEndpoint(`/api/status/${taskId}`));
             if (pollRes.ok) {
               const pollData = await pollRes.json();
+              if (pollData.percent !== undefined) {
+                setBatchItems((prev) =>
+                  prev.map((it) =>
+                    it.id === item.id
+                      ? {
+                          ...it,
+                          progress: Math.min(88, Math.max(5, pollData.percent)),
+                          stage: pollData.stage || it.stage,
+                        }
+                      : it
+                  )
+                );
+              }
               if (pollData.status === "completed") {
                 analysisDone = true;
                 finalResult = pollData.result;
               } else if (pollData.status === "error") {
+                analysisDone = true;
                 throw new Error(pollData.error || "Analysis failed");
               } else if (pollData.status === "cancelled") {
+                analysisDone = true;
                 throw new Error("Analysis was cancelled");
               }
             }
-          } catch (pe) {
+          } catch (pe: any) {
+            if (pe.message && (pe.message.includes("Analysis failed") || pe.message.includes("cancelled"))) {
+              throw pe;
+            }
             // Ignore brief polling blips
           }
         }
@@ -489,7 +507,15 @@ export function App() {
                   padding_sec: exportSettings.padding_sec,
                 }),
               });
+              if (!exportRes.ok) {
+                const errData = await exportRes.json().catch(() => ({}));
+                throw new Error(errData.detail || errData.message || "Export failed");
+              }
               const exportData = await exportRes.json();
+              if (exportData.status === "error") {
+                throw new Error(exportData.message || "Export failed");
+              }
+              const combinedPath = exportData.combined_video?.filepath || exportData.combined_video?.relative_path || "";
               setBatchItems((prev) =>
                 prev.map((it) =>
                   it.id === item.id
@@ -498,14 +524,14 @@ export function App() {
                         status: "exported",
                         progress: 100,
                         stage: "Completed & Clean Master Exported",
-                        outputPath: exportData.combined_path,
+                        outputPath: combinedPath,
                         segments: segs,
                         stats: itemStats,
                       }
                     : it
                 )
               );
-            } catch (ee) {
+            } catch (ee: any) {
               setBatchItems((prev) =>
                 prev.map((it) =>
                   it.id === item.id
@@ -513,7 +539,8 @@ export function App() {
                         ...it,
                         status: "completed",
                         progress: 100,
-                        stage: "Analysis Completed",
+                        stage: "Analysis Completed (Export Skipped)",
+                        error: ee.message,
                         segments: segs,
                         stats: itemStats,
                       }

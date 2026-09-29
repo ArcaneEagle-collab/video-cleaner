@@ -293,7 +293,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   )}
 
                   <a
-                    href={getApiEndpoint(`/api/stream/${exportResult.combined_video.filename}`)}
+                    href={getApiEndpoint(`/api/stream/${exportResult.combined_video.filename}?path=${encodeURIComponent(exportResult.combined_video.filepath)}`)}
                     download={exportResult.combined_video.filename}
                     className="btn btn-secondary"
                     style={{ padding: "6px 12px", fontSize: "12px" }}
@@ -308,9 +308,22 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             {/* Individual Clips List */}
             {exportResult.individual_clips && exportResult.individual_clips.length > 0 && (
               <div>
-                <span style={{ fontSize: "12px", fontWeight: "700", textTransform: "uppercase", color: "var(--text-secondary)", marginBottom: "8px", display: "block" }}>
-                  Individual Extracted Clips ({exportResult.individual_clips.length})
-                </span>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+                  <span style={{ fontSize: "12px", fontWeight: "700", textTransform: "uppercase", color: "var(--text-secondary)" }}>
+                    Individual Extracted Clips ({exportResult.individual_clips.length})
+                  </span>
+                  {exportResult.zip_file && (
+                    <a
+                      href={getApiEndpoint(`/api/stream/${exportResult.zip_file.filename}?path=${encodeURIComponent(exportResult.zip_file.filepath)}`)}
+                      download={exportResult.zip_file.filename}
+                      className="btn btn-secondary"
+                      style={{ padding: "4px 10px", fontSize: "11px", display: "flex", alignItems: "center", gap: "6px", color: "#F3D079", borderColor: "rgba(212, 175, 55, 0.4)" }}
+                      title="Download all individual clips bundled as a single ZIP archive"
+                    >
+                      <Download size={12} /> Download All Clips (.zip)
+                    </a>
+                  )}
+                </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "180px", overflowY: "auto" }}>
                   {exportResult.individual_clips.map((c) => (
                     <div
@@ -338,7 +351,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                           <Play size={11} /> Play
                         </button>
                         <a
-                          href={getApiEndpoint(`/api/stream/${c.filename}`)}
+                          href={getApiEndpoint(`/api/stream/${c.filename}?path=${encodeURIComponent(c.filepath)}`)}
                           download={c.filename}
                           className="btn btn-secondary"
                           style={{ padding: "4px 8px", fontSize: "11px" }}

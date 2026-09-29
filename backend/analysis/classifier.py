@@ -23,7 +23,7 @@ class VideoAnalysisPipeline:
     def __init__(
         self,
         sensitivity: str = "Medium",
-        min_clip_duration: float = 1.2,
+        min_clip_duration: float = 0.5,
         min_clip_gap: float = 0.3,
         detect_static: bool = True,
         detect_zoom_pan: bool = True,
@@ -230,16 +230,26 @@ class VideoAnalysisPipeline:
         if cancel_check and cancel_check():
             return {"cancelled": True}
 
-        # Subdivide long scenes (> 8s) into logical chunks for granular analysis
+        # Adaptive scene chunking based on video duration
+        # Prevents generating hundreds of redundant chunks on long 40+ min videos
+        if total_duration > 1800:     # > 30 minutes (e.g. 40-60 min videos)
+            chunk_len = 14.0
+            split_threshold = 18.0
+        elif total_duration > 600:    # > 10 minutes
+            chunk_len = 10.0
+            split_threshold = 13.0
+        else:                         # Short videos (< 10 min)
+            chunk_len = 6.0
+            split_threshold = 8.0
+
         subdivided_scenes = []
         for s_start, s_end in raw_scenes:
             dur = s_end - s_start
-            if dur > 8.0:
-                chunk_len = 4.5
+            if dur > split_threshold:
                 curr = s_start
                 while curr < s_end:
                     nxt = min(curr + chunk_len, s_end)
-                    if (s_end - nxt) < 1.5:
+                    if (s_end - nxt) < 2.0:
                         nxt = s_end
                     subdivided_scenes.append((curr, nxt))
                     curr = nxt
@@ -252,7 +262,7 @@ class VideoAnalysisPipeline:
         # ----------------------------------------------------------------------
         # Stage 2 to 5: Frame Extraction and Multi-Detector Analysis
         # ----------------------------------------------------------------------
-        sampler = VideoFrameSampler(video_path, target_fps=3.0, max_width=480)
+        sampler = VideoFrameSampler(video_path, target_fps=3.0, max_width=440 if total_duration > 1200 else 480)
         scene_results = []
         representative_frames = []
 
@@ -392,17 +402,30 @@ class VideoAnalysisPipeline:
 
             # 3. Check Image Over Background (photo card over moving background, top photo over ticker, blurred wings)
             elif bg.get("detected") and bg.get("confidence", 0) >= 0.70:
-                classification = "IMAGE_ON_BACKGROUND"
-                confidence = bg["confidence"]
-                reason = f"Editorial image over background: {bg.get('reason', 'Image placed over backdrop')}"
-                action = "REMOVE"
+                # Protect real video with organic motion and camera movement
+                if motion.get("is_organic_motion") and motion.get("motion_score", 0) > 0.30 and motion.get("local_motion_score", 0) > 0.18:
+                    classification = "REAL_VIDEO"
+                    confidence = 0.85
+                    reason = f"Natural camera video footage with organic motion (score: {motion.get('motion_score', 0):.2f})"
+                    action = "KEEP"
+                else:
+                    classification = "IMAGE_ON_BACKGROUND"
+                    confidence = bg["confidence"]
+                    reason = f"Editorial image over background: {bg.get('reason', 'Image placed over backdrop')}"
+                    action = "REMOVE"
 
             # 4. Check Static Image
             elif static.get("confidence", 0) >= 0.65 or static.get("is_static", False):
-                # Protect talking heads and low-motion real video
-                if (motion.get("local_motion_score", 0) > 0.12 or static.get("temporal_noise", 0) > 0.8) and static.get("avg_pixel_diff", 0) > 0.8 and motion.get("motion_score", 0) > 0.05:
+                # Protect talking heads, subtle local motion, and real sensor noise footage
+                if (
+                    motion.get("is_organic_motion") or
+                    motion.get("motion_score", 0) > 0.15 or
+                    (motion.get("local_motion_score", 0) > 0.10 and motion.get("motion_score", 0) > 0.01) or
+                    (static.get("max_pixel_diff", 0) > 45.0 and motion.get("motion_score", 0) > 0.01) or
+                    (static.get("temporal_noise", 0) > 2.2 and motion.get("motion_score", 0) > 0.01)
+                ):
                     classification = "REAL_VIDEO"
-                    confidence = 0.82
+                    confidence = 0.85
                     reason = "Static camera with subtle local organic movement (talking head / living subject)"
                     action = "KEEP"
                 else:
@@ -418,31 +441,41 @@ class VideoAnalysisPipeline:
                 reason = f"Repeated still image slide (matched earlier scene at {dup.get('matched_timestamp', 0):.1f}s)"
                 action = "REMOVE"
 
-            # 6. Dead motionless frame check (near-zero optical flow, no localized movement, and tiny pixel difference)
-            elif motion.get("motion_score", 0) < 0.02 and static.get("avg_pixel_diff", 0) < 0.05 and static.get("max_pixel_diff", 0) < 15.0 and not motion.get("is_organic_motion"):
+            # 6. Dead motionless frame check (near-zero optical flow, no localized movement, and low pixel difference)
+            elif (
+                (motion.get("motion_score", 0) < 0.08 and not motion.get("is_organic_motion")) and
+                static.get("max_pixel_diff", 0) <= 35.0 and
+                (static.get("avg_pixel_diff", 0) < 5.0 or static.get("avg_ssim", 0) > 0.94 or static.get("avg_dhash_dist", 99) <= 2)
+            ):
                 classification = "STATIC_IMAGE"
                 confidence = 0.95
-                reason = f"Zero motion still frame sequence (motion score: {motion.get('motion_score', 0):.3f})"
+                reason = f"Zero motion still frame sequence (motion score: {motion.get('motion_score', 0):.3f}, SSIM: {static.get('avg_ssim', 0):.3f})"
                 action = "REMOVE"
 
             # 7. Real Video vs Ambiguous
-            elif (motion.get("is_organic_motion") or motion.get("motion_score", 0) > 0.30) and static.get("confidence", 0) < 0.50 and zoom.get("confidence", 0) < 0.45 and bg.get("confidence", 0) < 0.50:
+            elif (motion.get("is_organic_motion") or motion.get("motion_score", 0) > 0.25) and static.get("confidence", 0) < 0.50 and zoom.get("confidence", 0) < 0.45 and bg.get("confidence", 0) < 0.50:
                 classification = "REAL_VIDEO"
                 confidence = max(0.80, 1.0 - static.get("confidence", 0.0))
                 reason = f"Real video footage with organic motion (score: {motion.get('motion_score', 0):.2f})"
                 action = "KEEP"
 
             else:
+                # Check if scene is essentially motionless without localized movement
+                if motion.get("motion_score", 0) < 0.10 and not motion.get("is_organic_motion") and static.get("avg_ssim", 0) > 0.92 and static.get("max_pixel_diff", 0) <= 35.0:
+                    classification = "STATIC_IMAGE"
+                    confidence = 0.85
+                    reason = f"Motionless still slide without organic movement (motion: {motion.get('motion_score', 0):.2f})"
+                    action = "REMOVE"
                 # Check if it's borderline
-                if static.get("confidence", 0) > 0.45 or zoom.get("confidence", 0) > 0.45:
+                elif static.get("confidence", 0) > 0.45 or zoom.get("confidence", 0) > 0.45:
                     classification = "UNCERTAIN"
                     confidence = max(static.get("confidence", 0), zoom.get("confidence", 0))
                     reason = "Borderline motion characteristics — flagged for manual review"
                     action = "UNCERTAIN"
                 else:
-                    # Default to Real Video (protect footage from being discarded!)
+                    # Default to Real Video (natural motion present)
                     classification = "REAL_VIDEO"
-                    confidence = 0.75
+                    confidence = 0.80
                     reason = f"Natural camera video footage (motion: {motion.get('motion_score', 0):.2f})"
                     action = "KEEP"
 
@@ -474,23 +507,34 @@ class VideoAnalysisPipeline:
             })
 
         # ----------------------------------------------------------------------
-        # Post-Processing: Minimum Usable Clip Duration & Gap Merging
+        # Post-Processing: Minimum Usable Clip Duration & Seamless Gap Merging
         # ----------------------------------------------------------------------
-        # Merge very small gaps between adjacent KEEP clips if gap <= min_clip_gap
-        # And flag KEEP clips that are < min_clip_duration as unusable if not merged
-        for i, seg in enumerate(classified_segments):
-            if seg["action"] == "KEEP" and seg["duration"] < self.min_clip_duration:
-                # Check if can merge with previous or next keep
-                can_merge = False
-                if i > 0 and classified_segments[i - 1]["action"] == "KEEP" and (seg["start"] - classified_segments[i - 1]["end"]) <= self.min_clip_gap:
-                    can_merge = True
-                if i < len(classified_segments) - 1 and classified_segments[i + 1]["action"] == "KEEP" and (classified_segments[i + 1]["start"] - seg["end"]) <= self.min_clip_gap:
-                    can_merge = True
+        # 1. Seamlessly merge adjacent KEEP segments if gap <= min_clip_gap into continuous clean clips
+        merged_segments = []
+        for seg in classified_segments:
+            if not merged_segments:
+                merged_segments.append(seg)
+                continue
 
-                if not can_merge:
-                    seg["action"] = "REMOVE"
-                    seg["classification"] = "SHORT_UNUSABLE"
-                    seg["reason"] = f"Clip duration ({seg['duration']:.1f}s) is below minimum usable threshold ({self.min_clip_duration}s)"
+            prev = merged_segments[-1]
+            if prev["action"] == "KEEP" and seg["action"] == "KEEP" and (seg["start"] - prev["end"]) <= self.min_clip_gap:
+                prev["end"] = seg["end"]
+                prev["duration"] = round(prev["end"] - prev["start"], 3)
+                if seg["confidence"] > prev["confidence"]:
+                    prev["confidence"] = seg["confidence"]
+                    prev["confidence_percent"] = seg["confidence_percent"]
+                prev["reason"] = f"Merged continuous clean footage ({prev['duration']:.1f}s)"
+            else:
+                merged_segments.append(seg)
+
+        # 2. Flag stand-alone KEEP clips shorter than 0.4s as SHORT_UNUSABLE
+        for seg in merged_segments:
+            if seg["action"] == "KEEP" and seg["duration"] < max(0.4, min(self.min_clip_duration, 0.5)):
+                seg["action"] = "REMOVE"
+                seg["classification"] = "SHORT_UNUSABLE"
+                seg["reason"] = f"Clip duration ({seg['duration']:.2f}s) is below viable extraction limit"
+
+        classified_segments = merged_segments
 
         report("Complete", 100.0, scenes_detected=len(classified_segments), likely_images=sum(1 for s in classified_segments if s['action'] == 'REMOVE'), likely_usable=sum(1 for s in classified_segments if s['action'] == 'KEEP'))
 

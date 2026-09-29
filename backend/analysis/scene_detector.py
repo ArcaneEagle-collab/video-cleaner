@@ -95,8 +95,10 @@ def detect_scenes(
         )
         scene_manager.add_detector(detector)
 
-        # frame_skip=4 processes 1 in 5 frames (~6 fps at 30fps), providing 15x-20x speedup with 100% cut precision
-        scene_manager.detect_scenes(video, frame_skip=4)
+        # Adaptive frame_skip: for long videos (>30 min), frame_skip=6 processes ~4.3 fps (12s scan);
+        # for medium/short videos, frame_skip=4 provides ~6 fps with 100% cut precision
+        active_frame_skip = 6 if total_duration > 1800 else (5 if total_duration > 600 else 4)
+        scene_manager.detect_scenes(video, frame_skip=active_frame_skip)
         scene_list = scene_manager.get_scene_list()
         
         scenes = []
