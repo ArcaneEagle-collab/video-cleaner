@@ -53,7 +53,11 @@ class MotionDetector:
                     s1 = cv2.resize(gray1, (max(160, w_o // 2), max(90, h_o // 2)), interpolation=cv2.INTER_AREA)
                     s2 = cv2.resize(gray2, (max(160, w_o // 2), max(90, h_o // 2)), interpolation=cv2.INTER_AREA)
                     f_small = cv2.calcOpticalFlowFarneback(s1, s2, None, 0.5, 3, 13, 3, 5, 1.2, 0)
-                    flow = cv2.resize(f_small, (w_o, h_o), interpolation=cv2.INTER_LINEAR) * 2.0
+                    scale_x = w_o / max(1, f_small.shape[1])
+                    scale_y = h_o / max(1, f_small.shape[0])
+                    flow = cv2.resize(f_small, (w_o, h_o), interpolation=cv2.INTER_LINEAR)
+                    flow[..., 0] *= scale_x
+                    flow[..., 1] *= scale_y
 
                 u = flow[..., 0]
                 v = flow[..., 1]
@@ -167,7 +171,11 @@ class MotionDetector:
                 s1 = cv2.resize(gray1, (max(160, w_o // 2), max(90, h_o // 2)), interpolation=cv2.INTER_AREA)
                 s2 = cv2.resize(gray2, (max(160, w_o // 2), max(90, h_o // 2)), interpolation=cv2.INTER_AREA)
                 f_small = cv2.calcOpticalFlowFarneback(s1, s2, None, 0.5, 3, 13, 3, 5, 1.2, 0)
-                flow = cv2.resize(f_small, (w_o, h_o), interpolation=cv2.INTER_LINEAR) * 2.0
+                scale_x = w_o / max(1, f_small.shape[1])
+                scale_y = h_o / max(1, f_small.shape[0])
+                flow = cv2.resize(f_small, (w_o, h_o), interpolation=cv2.INTER_LINEAR)
+                flow[..., 0] *= scale_x
+                flow[..., 1] *= scale_y
                 u = flow[..., 0]
                 v = flow[..., 1]
                 mag = np.hypot(u, v)
@@ -201,6 +209,8 @@ class MotionDetector:
                 similarities.append(norm_sim)
             except Exception:
                 continue
+
+        if not magnitudes:
             return {
                 "motion_score": 0.0,
                 "global_motion_score": 0.0,
