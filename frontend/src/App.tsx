@@ -55,9 +55,9 @@ export function App() {
   // Export Settings
   const [exportSettings, setExportSettings] = useState<ExportSettings>({
     export_combined: true,
-    export_individual: true,
+    export_individual: false,
     quality: "High",
-    include_audio: true,
+    include_audio: false,
     codec: "libx264",
     padding_sec: 0.0,
   });

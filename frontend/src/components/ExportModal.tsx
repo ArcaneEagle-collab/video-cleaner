@@ -384,15 +384,30 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         ) : (
           /* 4. Export Form Options */
           <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+            {/* Summary banner */}
             <div style={{ background: "rgba(212, 175, 55, 0.12)", padding: "12px 16px", borderRadius: "8px", border: "1px solid rgba(212, 175, 55, 0.3)", fontSize: "13px" }}>
-              Ready to export and merge <span style={{ fontWeight: "700", color: "#F3D079" }}>{keptClipsCount} preserved footage segments</span> into a clean single master video.
+              Ready to export <span style={{ fontWeight: "700", color: "#F3D079" }}>{keptClipsCount} surviving footage segments</span> merged into a single fully clean video file — all images, slideshows &amp; transitions removed.
+            </div>
+
+            {/* Primary output — always on, non-negotiable */}
+            <div style={{ background: "rgba(16, 185, 129, 0.08)", padding: "14px 16px", borderRadius: "10px", border: "1px solid rgba(16, 185, 129, 0.25)", display: "flex", alignItems: "center", gap: "12px" }}>
+              <CheckCircle2 size={22} color="#10B981" style={{ flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "14px", fontWeight: "700", color: "#F8FAFC" }}>Clean Combined Video</div>
+                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>
+                  Single merged <span className="mono" style={{ color: "#F3D079" }}>originalname_clean.mp4</span> — all unwanted segments cut out
+                </div>
+              </div>
+              <span style={{ fontSize: "11px", fontWeight: "700", color: "#10B981", background: "rgba(16,185,129,0.15)", padding: "3px 10px", borderRadius: "20px", border: "1px solid rgba(16,185,129,0.3)" }}>
+                Always included
+              </span>
             </div>
 
             {/* Destination Folder Selector */}
             <div style={{ background: "rgba(255, 255, 255, 0.03)", padding: "14px", borderRadius: "10px", border: "1px solid var(--border-subtle)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                 <label style={{ fontSize: "13px", fontWeight: "700", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <Folder size={16} color="#D4AF37" /> Export Destination
+                  <Folder size={16} color="#D4AF37" /> Save To
                 </label>
                 <button
                   type="button"
@@ -400,7 +415,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   style={{ padding: "4px 10px", fontSize: "12px" }}
                   onClick={handleSelectOutputDir}
                 >
-                  <FolderOpen size={13} /> Change Folder...
+                  <FolderOpen size={13} /> Change...
                 </button>
               </div>
               <div
@@ -417,9 +432,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               >
                 {exportSettings.output_dir || "Downloads (default)"}
               </div>
-              <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginTop: "6px" }}>
-                By default, the master video and clips are exported directly to your Downloads folder.
-              </span>
             </div>
 
             {/* Quality Preset */}
@@ -449,11 +461,54 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </div>
             </div>
 
-            {/* Optional Padding */}
+            {/* Optional Settings */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0px", background: "rgba(0, 0, 0, 0.2)", borderRadius: "10px", border: "1px solid var(--border-subtle)", overflow: "hidden" }}>
+              <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-subtle)" }}>
+                <span style={{ fontSize: "11px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)" }}>Optional</span>
+              </div>
+
+              {/* Audio toggle */}
+              <label style={{ display: "flex", alignItems: "center", gap: "12px", cursor: "pointer", padding: "12px 14px", borderBottom: "1px solid var(--border-subtle)", transition: "background 0.15s" }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <input
+                  type="checkbox"
+                  checked={exportSettings.include_audio}
+                  onChange={(e) => update("include_audio", e.target.checked)}
+                  style={{ accentColor: "#D4AF37", width: "16px", height: "16px", flexShrink: 0 }}
+                />
+                <div>
+                  <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>Keep original audio</div>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Includes synchronized audio tracks from the original video</div>
+                </div>
+              </label>
+
+              {/* Individual clips toggle */}
+              <label style={{ display: "flex", alignItems: "center", gap: "12px", cursor: "pointer", padding: "12px 14px", transition: "background 0.15s" }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <input
+                  type="checkbox"
+                  checked={exportSettings.export_individual}
+                  onChange={(e) => update("export_individual", e.target.checked)}
+                  style={{ accentColor: "#D4AF37", width: "16px", height: "16px", flexShrink: 0 }}
+                />
+                <div>
+                  <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>Also export individual clips</div>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                    Saves separate <span className="mono" style={{ color: "#F3D079" }}>clip_001.mp4, clip_002.mp4…</span> files alongside the merged video
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            {/* Clip padding */}
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
                 <label style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)" }}>
-                  Padding around surviving clips
+                  Clip boundary padding
                 </label>
                 <span className="mono" style={{ fontSize: "13px", fontWeight: "700", color: "#F3D079" }}>
                   ±{exportSettings.padding_sec.toFixed(1)}s
@@ -469,45 +524,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 style={{ width: "100%", accentColor: "#D4AF37", cursor: "pointer" }}
               />
               <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                Boundary-protected: automatically isolates cuts from removed slideshows with zero image bleeding.
+                Extends each kept clip by this amount on each side — useful to avoid hard cuts at scene edges.
               </span>
             </div>
 
-            {/* Checkboxes: Export Modes */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px", background: "rgba(0, 0, 0, 0.2)", padding: "14px", borderRadius: "8px" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontSize: "13px" }}>
-                <input
-                  type="checkbox"
-                  checked={exportSettings.export_combined}
-                  onChange={(e) => update("export_combined", e.target.checked)}
-                  style={{ accentColor: "#D4AF37", width: "16px", height: "16px" }}
-                />
-                <span>Export combined video (<span className="mono" style={{ color: "#F3D079" }}>originalname_clean.mp4</span>)</span>
-              </label>
-
-              <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontSize: "13px" }}>
-                <input
-                  type="checkbox"
-                  checked={exportSettings.export_individual}
-                  onChange={(e) => update("export_individual", e.target.checked)}
-                  style={{ accentColor: "#D4AF37", width: "16px", height: "16px" }}
-                />
-                <span>Export individual clips (<span className="mono" style={{ color: "#F3D079" }}>clip_001.mp4, clip_002.mp4...</span>)</span>
-              </label>
-
-              <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontSize: "13px" }}>
-                <input
-                  type="checkbox"
-                  checked={exportSettings.include_audio}
-                  onChange={(e) => update("include_audio", e.target.checked)}
-                  style={{ accentColor: "#D4AF37", width: "16px", height: "16px" }}
-                />
-                <span>Keep original synchronized audio tracks</span>
-              </label>
-            </div>
-
             {/* Modal Actions */}
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "10px" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "4px" }}>
               <button type="button" className="btn btn-secondary" onClick={onClose} disabled={isExporting}>
                 Cancel
               </button>
@@ -519,7 +541,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 disabled={isExporting || keptClipsCount === 0}
                 style={{ padding: "10px 24px" }}
               >
-                <Download size={16} /> Start Clip Extraction
+                <Download size={16} /> Download Clean Video
               </button>
             </div>
           </div>
