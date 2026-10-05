@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 # ─── App version (single source of truth) ────────────────────────────────────
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 
 from ..video.ffprobe import probe_video, get_ffmpeg_path, get_ffprobe_path
 from ..analysis.classifier import VideoAnalysisPipeline
@@ -76,8 +76,8 @@ class ExportRequest(BaseModel):
     export_combined: bool = True
     export_individual: bool = False
     quality: str = "High"
-    include_audio: bool = False
-    codec: str = "libx264"
+    include_audio: bool = True
+    codec: str = "auto"
     padding_sec: float = 0.0
     output_dir: Optional[str] = None
 
