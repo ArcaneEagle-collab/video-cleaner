@@ -1,4 +1,5 @@
 import time
+import threading
 from typing import List, Tuple, Optional, Callable
 from scenedetect import open_video, SceneManager, ContentDetector, AdaptiveDetector
 
@@ -54,12 +55,108 @@ def detect_scenes(
     """
     from ..video.ffprobe import probe_video
     total_duration = 0.0
+    meta: dict = {}
     try:
         meta = probe_video(video_path)
         total_duration = meta.get("duration", 0.0)
     except Exception:
         pass
 
+    # Dense frame-accurate hard-cut pass (runs in parallel with PySceneDetect below).
+    # PySceneDetect with frame skipping misses a large share of cuts on montage footage, leaving
+    # several unrelated shots inside one "scene"; the dense pass finds them all.
+    dense_cuts: List[float] = []
+    dense_error: List[BaseException] = []
+
+    def _dense_worker():
+        try:
+            from .dense_cuts import decode_tiny_gray, confirmed_cut_times
+            meta_fps = 30.0
+            try:
+                meta_fps = float(meta.get("fps", 30.0)) or 30.0
+            except Exception:
+                pass
+            frames = decode_tiny_gray(
+                video_path,
+                cancel_check=cancel_check,
+                total_frames_hint=int(total_duration * meta_fps) if total_duration > 0 else 0,
+            )
+            dense_cuts.extend(confirmed_cut_times(frames, total_duration, meta_fps))
+        except BaseException as e:  # noqa: BLE001 - reported after join, never crash analysis
+            dense_error.append(e)
+
+    dense_thread = threading.Thread(target=_dense_worker, name="dense-cuts", daemon=True)
+    dense_thread.start()
+
+    try:
+        scenes = _pyscenedetect_scenes(video_path, min_scene_len_sec, threshold, total_duration,
+                                       progress_callback, cancel_check)
+    except InterruptedError:
+        dense_thread.join()
+        raise
+
+    dense_thread.join()
+    if dense_error and isinstance(dense_error[0], InterruptedError):
+        raise dense_error[0]
+
+    if dense_cuts and total_duration > 0:
+        scenes = _merge_dense_cuts(scenes, dense_cuts, total_duration, min_scene_len_sec)
+    if scenes:
+        return scenes
+
+    # If PySceneDetect detected 0 or 1 scene or encountered an issue,
+    # probe the video duration and return the single full scene or natural windowing
+    if total_duration > 0:
+        return [(0.0, round(total_duration, 3))]
+        
+    return [(0.0, 10.0)]
+
+
+def _merge_dense_cuts(
+    scenes: List[Tuple[float, float]],
+    dense_cuts: List[float],
+    total_duration: float,
+    min_scene_len_sec: float,
+) -> List[Tuple[float, float]]:
+    """Union of PySceneDetect boundaries and dense cuts, de-duplicated within 0.2s."""
+    boundaries = {0.0, round(total_duration, 3)}
+    for s, e in scenes or []:
+        boundaries.add(round(s, 3))
+        boundaries.add(round(e, 3))
+    existing = sorted(boundaries)
+    for t in dense_cuts:
+        if t <= 0.0 or t >= total_duration:
+            continue
+        # Prefer the frame-accurate dense timestamp over a PySceneDetect boundary within 0.2s
+        near = [b for b in existing if abs(b - t) <= 0.2 and b not in (0.0, round(total_duration, 3))]
+        if near:
+            for b in near:
+                boundaries.discard(b)
+        boundaries.add(round(t, 3))
+        existing = sorted(boundaries)
+
+    ordered = sorted(boundaries)
+    # Drop boundaries that would create sub-minimum scenes (keep the earlier one)
+    min_len = max(0.2, min_scene_len_sec * 0.9)
+    cleaned = [ordered[0]]
+    for b in ordered[1:]:
+        if b - cleaned[-1] < min_len and b != ordered[-1]:
+            continue
+        cleaned.append(b)
+    if len(cleaned) < 2:
+        return scenes
+    return [(cleaned[i], cleaned[i + 1]) for i in range(len(cleaned) - 1) if cleaned[i + 1] > cleaned[i]]
+
+
+def _pyscenedetect_scenes(
+    video_path: str,
+    min_scene_len_sec: float,
+    threshold: float,
+    total_duration: float,
+    progress_callback: Optional[Callable[[float, float, int], None]],
+    cancel_check: Optional[Callable[[], bool]],
+) -> List[Tuple[float, float]]:
+    """PySceneDetect content scan (unchanged behaviour); returns [] on failure."""
     try:
         # Prefer OpenCV backend on Windows (3x faster than PyAV due to thread queue contention), falling back to PyAV
         video = None
@@ -131,7 +228,8 @@ def detect_scenes(
     # If PySceneDetect detected 0 or 1 scene or encountered an issue,
     # probe the video duration and return the single full scene or natural windowing
     if total_duration > 0:
-        return [(0.0, round(total_duration, 3))]
+        return []
+
         
     return [(0.0, 10.0)]
 

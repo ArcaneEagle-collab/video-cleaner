@@ -48,14 +48,14 @@ def trim_blank_lead_in(
             small = cv2.resize(frame, (160, 90), interpolation=cv2.INTER_NEAREST)
             mean_val = float(small.mean())
 
-            # Check 1: Solid black / dark dip frame
-            if mean_val <= 26.0:
+            # Check 1: Solid black / dark dip frame (pure black < 12.0)
+            if mean_val <= 12.0:
                 curr_frame += 1
                 prev_gray = None
                 continue
 
-            # Check 2: White flash / spike frame
-            if mean_val >= 226.0:
+            # Check 2: White flash / spike frame (pure white > 246.0)
+            if mean_val >= 246.0:
                 curr_frame += 1
                 prev_gray = None
                 continue
@@ -128,10 +128,11 @@ def trim_blank_lead_out(
         prev_gray = None
         for fn, small in reversed(frames_list):
             mean_val = float(small.mean())
-            if mean_val <= 26.0 or mean_val >= 226.0:
+            if mean_val <= 12.0 or mean_val >= 246.0:
                 cutoff_frame = fn
                 prev_gray = None
                 continue
+
 
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
             if prev_gray is not None:
@@ -336,10 +337,10 @@ class VideoExporter:
         zip_file_info = None
 
         # ── FAST PATH: Direct single-pass combined video export ──────────────────────
-        # When user only wants the clean master video (export_individual=False),
+        # When user only wants the clean master video (export_individual=False) and there are <= 30 intervals,
         # direct FFmpeg filtergraph trims & concatenates in a single linear pass.
-        # This completely eliminates temporary disk writes and cuts export time by 80-90%.
-        if export_combined and not export_individual:
+        # For videos with > 30 intervals, parallel interval extraction + instant stream copy is 6x faster.
+        if export_combined and not export_individual and len(combined_intervals) <= 30:
             if progress_callback:
                 progress_callback({
                     "stage": "Rendering clean master video in high-speed single pass...",
@@ -413,7 +414,7 @@ class VideoExporter:
                 }
 
         # ── MULTI-CLIP PATH: Parallel clip extraction & instant stream copy ─────────
-        # Used when individual clips are requested or as direct export fallback
+        # Used when individual clips are requested, or for large interval counts, or as fallback
         def cut_single_clip(task_args: Tuple[int, Dict[str, Any]]) -> Dict[str, Any]:
             idx, clip_info = task_args
             c_start = clip_info["start"]
@@ -445,7 +446,8 @@ class VideoExporter:
                 "size_mb": round(clip_out.stat().st_size / (1024 * 1024), 2) if clip_out.exists() else 0.0
             }
 
-        cut_workers = min(4, os.cpu_count() or 2)
+        cut_workers = min(8, max(4, os.cpu_count() or 4))
+
         tasks = list(enumerate(keep_clips, 1))
         individual_clips = []
         completed_count = 0

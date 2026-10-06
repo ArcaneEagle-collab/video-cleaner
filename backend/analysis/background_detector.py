@@ -252,10 +252,10 @@ class ImageWithBackgroundDetector:
                 reason = f"Still photo in upper frame ({avg['top_zero']*100:.0f}% static) over animated banner/ticker"
 
         # Check 5: Photo Card Inset over Moving Backdrop
-        # Requires true disparity: center is either motionless (cen_zero > 0.55 or cen_mag < 0.25)
-        # with moving backdrop (bdr_mag > 0.50), OR has card borders with significant speed disparity.
+        # Requires true disparity: center is essentially motionless (cen_mag < 0.35 and cen_zero > 0.55)
+        # with moving backdrop (bdr_mag > 0.55 and bdr_mag > cen_mag * 1.8), OR has card borders with significant speed disparity.
         elif (
-            (avg["cen_zero"] > 0.55 or avg["cen_mag"] < 0.25) and avg["bdr_mag"] > 0.50
+            (avg["cen_mag"] < 0.35 and avg["cen_zero"] > 0.55 and avg["bdr_mag"] > 0.55 and (avg["bdr_mag"] - avg["cen_mag"] > 0.30))
         ) or (
             (avg["white_ratio"] > 0.08 or avg["cen_inl"] > 0.88) and
             (avg["bdr_mag"] - avg["cen_mag"] > 0.50) and
@@ -265,6 +265,7 @@ class ImageWithBackgroundDetector:
             confidence = 0.93
             bg_subtype = "STATIC_INSET_PHOTO_CARD"
             reason = f"Photo card inset (core motion: {avg['cen_mag']:.2f}px) over moving backdrop"
+
 
         # Check 6: Blurred Duplicate Background (Wings / Bokeh Pillarbox)
         elif avg["wings_lap"] < 45.0 and avg["wings_color_var"] > 45.0 and avg["cen_lap"] > 90.0 and (avg["wings_lap"] / max(1.0, avg["cen_lap"]) < 0.32) and (avg["cen_zero"] > 0.35 or avg["cen_mag"] < 0.7):

@@ -377,10 +377,17 @@ class VideoAnalysisPipeline:
 
             # 1. Check Transition
             if trans.get("detected"):
-                classification = "TRANSITION"
-                confidence = trans["confidence"]
-                reason = f"Editing transition detected: {trans.get('reason', 'Luminance / crossfade pattern')}"
-                action = "REMOVE"
+                # Guard against false transition detections on long real video shots with organic motion
+                if dur > 1.8 and motion.get("is_organic_motion") and motion.get("motion_score", 0) > 0.35 and trans.get("type") != "BLANK_SCREEN":
+                    classification = "REAL_VIDEO"
+                    confidence = 0.85
+                    reason = f"Natural camera video footage with organic motion (score: {motion.get('motion_score', 0):.2f})"
+                    action = "KEEP"
+                else:
+                    classification = "TRANSITION"
+                    confidence = trans["confidence"]
+                    reason = f"Editing transition detected: {trans.get('reason', 'Luminance / crossfade pattern')}"
+                    action = "REMOVE"
 
             # 2. Check Ken Burns Zoom / Pan / Slide
             elif zoom.get("detected") and zoom.get("confidence", 0) >= 0.50:
@@ -400,19 +407,13 @@ class VideoAnalysisPipeline:
                         reason = f"Artificial Ken Burns pan/slide (Uniform planar translation, residual: {zoom.get('residual_error', 0):.2f})"
                     action = "REMOVE"
 
-            # 3. Check Image Over Background (photo card over moving background, top photo over ticker, blurred wings)
+            # 3. Check Image Over Background (photo card over moving background, top photo over ticker, blurred wings, canvas frames)
             elif bg.get("detected") and bg.get("confidence", 0) >= 0.70:
-                # Protect real video with organic motion and camera movement
-                if motion.get("is_organic_motion") and motion.get("motion_score", 0) > 0.30 and motion.get("local_motion_score", 0) > 0.18:
-                    classification = "REAL_VIDEO"
-                    confidence = 0.85
-                    reason = f"Natural camera video footage with organic motion (score: {motion.get('motion_score', 0):.2f})"
-                    action = "KEEP"
-                else:
-                    classification = "IMAGE_ON_BACKGROUND"
-                    confidence = bg["confidence"]
-                    reason = f"Editorial image over background: {bg.get('reason', 'Image placed over backdrop')}"
-                    action = "REMOVE"
+                classification = "IMAGE_ON_BACKGROUND"
+                confidence = bg["confidence"]
+                reason = f"Editorial image over background: {bg.get('reason', 'Image placed over backdrop')}"
+                action = "REMOVE"
+
 
             # 4. Check Static Image
             elif static.get("confidence", 0) >= 0.65 or static.get("is_static", False):

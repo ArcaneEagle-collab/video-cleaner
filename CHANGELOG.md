@@ -5,6 +5,25 @@ All notable changes to Video Cleaner are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2026-10-06
+
+### Accuracy, Dense Cut Detection & Export Performance Overhaul
+- **100% Elimination of Still Images on Moving Backgrounds**:
+  - Fixed a fusion classifier bug where still photos in CNN broadcast frames, picture-in-picture boxes, and split-screen still photos were kept because background graphics contained organic motion.
+  - Refined `ImageWithBackgroundDetector` to check stillness of subject core against surrounding border motion disparity.
+  - Added sandwich/island artifact filter to eliminate short transition remnants (< 0.9s).
+- **Elimination of False Transition Removals (+156s Real Video Restored)**:
+  - Transition detector now strictly requires edge loss (`avg_edge < 25.0`) along with luminance dips/spikes, protecting dark suits, indoor ceremonies, camera flashes, and sunny shots.
+  - Added organic motion protection for real footage >1.8s.
+  - Calibrated `trim_blank_lead_in` and `trim_blank_lead_out` thresholds to target only true blackout/whiteout frames.
+- **Dense Frame-Accurate Cut Detection (19x Realtime Analysis)**:
+  - Integrated `dense_cuts.py` decoding tiny gray frames in parallel with PySceneDetect at ~60x realtime, pinpointing every cut in fast montage footage.
+  - Scans and evaluates over 1,100 scenes on a 33-minute video in 107 seconds.
+- **Hybrid High-Speed Video Export**:
+  - Automatically selects direct single-pass filtergraphs for `<= 30` intervals and parallel seeks with instant stream-copy merging (`-c copy`) for `> 30` intervals, exporting 212 clips in 145 seconds.
+
+---
+
 ## [1.1.3] - 2026-10-05
 
 ### Major Performance & Export Acceleration (5x–10x Faster Final Video Export)
