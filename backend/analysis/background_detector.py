@@ -87,20 +87,22 @@ class ImageWithBackgroundDetector:
                 blue_mask = (bot_hsv[..., 0] >= 100) & (bot_hsv[..., 0] <= 130) & (bot_hsv[..., 1] > 115) & (bot_hsv[..., 2] > 70)
                 blue_ratio = float(np.mean(blue_mask))
 
-                # Straight Border Lines for Card Frames (Hough Transform)
-                edges = cv2.Canny(g1, 50, 150)
-                lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=70, minLineLength=int(min(h, w) * 0.22), maxLineGap=10)
+                # Straight Border Lines for Card Frames (Hough Transform - only run when candidate card borders exist)
                 perpendicular_corners = 0
-                if lines is not None and len(lines) >= 2:
-                    angles = []
-                    for l in lines:
-                        pts = l[0] if len(l.shape) > 1 else l
-                        angles.append(np.degrees(np.arctan2(pts[3] - pts[1], pts[2] - pts[0])) % 180)
-                    for a1 in angles:
-                        for a2 in angles:
-                            diff_a = abs(a1 - a2)
-                            if 82 < diff_a < 98:
-                                perpendicular_corners += 1
+                if white_ratio > 0.04 or blue_ratio > 0.04:
+                    edges = cv2.Canny(g1, 50, 150)
+                    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=70, minLineLength=int(min(h, w) * 0.22), maxLineGap=10)
+                    if lines is not None and len(lines) >= 2:
+                        angles = []
+                        for l in lines:
+                            pts = l[0] if len(l.shape) > 1 else l
+                            angles.append(np.degrees(np.arctan2(pts[3] - pts[1], pts[2] - pts[0])) % 180)
+                        for a1 in angles:
+                            for a2 in angles:
+                                diff_a = abs(a1 - a2)
+                                if 82 < diff_a < 98:
+                                    perpendicular_corners += 1
+
 
                 # -------------------------------------------------------------
                 # 3. Top 70% vs Bottom 30% Motion Disparity

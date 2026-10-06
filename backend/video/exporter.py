@@ -446,7 +446,7 @@ class VideoExporter:
                 "size_mb": round(clip_out.stat().st_size / (1024 * 1024), 2) if clip_out.exists() else 0.0
             }
 
-        cut_workers = min(8, max(4, os.cpu_count() or 4))
+        cut_workers = min(12, max(6, os.cpu_count() or 4))
 
         tasks = list(enumerate(keep_clips, 1))
         individual_clips = []
